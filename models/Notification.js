@@ -114,15 +114,33 @@ NotificationSchema.statics.createTenantRegistrationNotification = function(landl
     title: 'New Tenant Registration Request',
     message: 'A new tenant has registered and is requesting to rent one of your properties.',
     relatedPropertyRequest: propertyRequestId,
+    relatedDocument: propertyRequestId,
+    relatedDocumentModel: 'PropertyRequest',
     actionRequired: true,
     actionUrl: `/landlord/tenant-requests/${propertyRequestId}`,
     priority: 'high'
   });
 };
 
-NotificationSchema.statics.createPropertyRequestNotification = function(landlordEmail, tenantId, requestDetails) {
+NotificationSchema.statics.createPropertyRequestNotification = async function(landlordId, tenantId, requestDetails) {
+  // If landlordId is an email, try to find the user first
+  let recipientId = landlordId;
+  
+  if (typeof landlordId === 'string' && landlordId.includes('@')) {
+    const User = mongoose.model('User');
+    const landlord = await User.findOne({ email: landlordId });
+    
+    if (!landlord) {
+      // Create a placeholder notification or handle this case
+      console.warn(`Landlord with email ${landlordId} not found in system`);
+      return null;
+    }
+    
+    recipientId = landlord._id;
+  }
+  
   return this.create({
-    recipient: landlordEmail, // Will need to find landlord by email
+    recipient: recipientId,
     sender: tenantId,
     type: 'property_request',
     title: 'New Property Upload Request',
@@ -133,11 +151,83 @@ NotificationSchema.statics.createPropertyRequestNotification = function(landlord
   });
 };
 
+NotificationSchema.statics.createPropertyApprovedNotification = function(tenantId, landlordId, propertyRequestId, propertyId) {
+  return this.create({
+    recipient: tenantId,
+    sender: landlordId,
+    type: 'property_approved',
+    title: 'Property Request Approved',
+    message: 'Your property request has been approved and the property has been created.',
+    relatedPropertyRequest: propertyRequestId,
+    relatedProperty: propertyId,
+    relatedDocument: propertyRequestId,
+    relatedDocumentModel: 'PropertyRequest',
+    actionRequired: true,
+    actionUrl: `/tenant/properties/${propertyId}`,
+    priority: 'high'
+  });
+};
+
+NotificationSchema.statics.createRequestRejectedNotification = function(tenantId, landlordId, propertyRequestId, rejectionReason) {
+  return this.create({
+    recipient: tenantId,
+    sender: landlordId,
+    type: 'request_rejected',
+    title: 'Property Request Rejected',
+    message: `Your property request has been rejected. Reason: ${rejectionReason}`,
+    relatedPropertyRequest: propertyRequestId,
+    relatedDocument: propertyRequestId,
+    relatedDocumentModel: 'PropertyRequest',
+    actionRequired: false,
+    priority: 'medium'
+  });
+};
+
+NotificationSchema.statics.createLeaseCreatedNotification = function(tenantId, landlordId, leaseId, propertyRequestId) {
+  return this.create({
+    recipient: tenantId,
+    sender: landlordId,
+    type: 'lease_approved',
+    title: 'Lease Created',
+    message: 'Your tenant registration has been approved and a lease has been created.',
+    relatedLease: leaseId,
+    relatedPropertyRequest: propertyRequestId,
+    relatedDocument: leaseId,
+    relatedDocumentModel: 'Lease',
+    actionRequired: true,
+    actionUrl: `/tenant/leases/${leaseId}`,
+    priority: 'high'
+  });
+};
+
 NotificationSchema.statics.markAsRead = function(notificationId, userId) {
   return this.findOneAndUpdate(
     { _id: notificationId, recipient: userId },
+    { isRead: true, readAt: new Date() },
+    { new: true }
+  );
+};
+
+NotificationSchema.statics.markAllAsRead = function(userId) {
+  return this.updateMany(
+    { recipient: userId, isRead: false },
     { isRead: true, readAt: new Date() }
   );
+};
+
+NotificationSchema.statics.getUnreadCount = function(userId) {
+  return this.countDocuments({ recipient: userId, isRead: false });
+};
+
+NotificationSchema.statics.getUserNotifications = function(userId, limit = 20, skip = 0) {
+  return this.find({ recipient: userId })
+    .populate('sender', 'firstName lastName email')
+    .populate('relatedProperty', 'address city')
+    .populate('relatedPropertyRequest')
+    .populate('relatedLease')
+    .sort({ createdAt: -1 })
+    .limit(limit)
+    .skip(skip);
 };
 
 export default mongoose.models.Notification || mongoose.model('Notification', NotificationSchema);

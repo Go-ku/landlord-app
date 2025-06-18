@@ -1,6 +1,8 @@
 // src/app/api/notifications/route.js - Backward Compatible Version
 import { getServerSession } from 'next-auth';
 import { authOptions } from '../auth/[...nextauth]/route';
+import PropertyRequest from 'models/PropertyRequest';
+import Property from 'models/Property'
 import { NextResponse } from 'next/server';
 import Notification from 'models/Notification';
 import dbConnect from 'lib/db';
