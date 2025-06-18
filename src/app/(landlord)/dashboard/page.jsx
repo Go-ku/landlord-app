@@ -1,306 +1,261 @@
-'use client'
-import { useState, useEffect } from 'react';
+// app/dashboard/page.tsx (Server Component)
 import Link from 'next/link';
 import DashboardStats from '@/components/dashboard/DashboardStats';
 import RecentPayments from '@/components/dashboard/RecentPayments';
 import MaintenanceStatus from '@/components/dashboard/MaintenanceStatus';
 import Breadcrumbs from '@/components/Breadcrumbs';
+import DashboardHeader from '@/components/dashboard/DashboardHeader';
+import ErrorDisplay from '@/components/dashboard/ErrorDisplay';
 import { 
-  AlertCircle, 
-  RefreshCw, 
   Plus,
   Home,
   Users,
   Wrench,
   CreditCard,
-  EyeIcon
 } from 'lucide-react';
 
-export default function DashboardPage() {
-  const [dashboardData, setDashboardData] = useState({
-    payments: [],
-    maintenance: [],
-    stats: {
-      properties: 0,
-      tenants: 0,
-      rent: 0,
-      occupancy: 0,
-      overdueRentals: 0,
-      overdueAmount: 0
+
+// Server-side data fetching functions
+async function fetchDashboardStats() {
+  const defaultStats = {
+    properties: 0,
+    tenants: 0,
+    rent: 0,
+    occupancy: 0,
+    overdueRentals: 0,
+    overdueAmount: 0
+  };
+
+  try {
+    const baseUrl = process.env.NEXTAUTH_URL || process.env.VERCEL_URL || 'http://localhost:3000';
+    const response = await fetch(`${baseUrl}/api/dashboard/stats`, {
+      next: { revalidate: 300 }, // Revalidate every 5 minutes
+      headers: {
+        'Content-Type': 'application/json',
+      }
+    });
+
+    if (!response.ok) {
+      console.warn('Stats API failed, calculating fallback stats...');
+      return await calculateFallbackStats(defaultStats);
     }
-  });
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-  const [refreshing, setRefreshing] = useState(false);
 
-  const fetchDashboardData = async (isRefresh = false) => {
-    try {
-      if (isRefresh) {
-        setRefreshing(true);
-      } else {
-        setLoading(true);
+    const result = await response.json();
+    return { ...defaultStats, ...result };
+  } catch (error) {
+    console.error('Error fetching dashboard stats:', error);
+    return await calculateFallbackStats(defaultStats);
+  }
+}
+
+async function fetchRecentPayments() {
+  try {
+    const baseUrl = process.env.NEXTAUTH_URL || process.env.VERCEL_URL || 'http://localhost:3000';
+    const response = await fetch(`${baseUrl}/api/payments?limit=5`, {
+      next: { revalidate: 60 }, // Revalidate every minute for payments
+      headers: {
+        'Content-Type': 'application/json',
       }
-      
-      console.log('Fetching dashboard data...');
-      
-      // Fetch all data in parallel with better error handling
-      const [paymentsRes, statsRes] = await Promise.allSettled([
-        fetch('/api/payments?limit=5').then(res => {
-          console.log('Payments API response status:', res.status);
-          return res;
-        }),
-        fetch('/api/dashboard/stats').then(res => {
-          console.log('Stats API response status:', res.status);
-          return res;
-        })
-      ]);
+    });
 
-      // Process payments data
-      let paymentsData = [];
-      if (paymentsRes.status === 'fulfilled' && paymentsRes.value?.ok) {
-        try {
-          const result = await paymentsRes.value.json();
-          console.log('Payments data received:', result);
-          // Handle different response formats
-          if (Array.isArray(result)) {
-            paymentsData = result;
-          } else if (result.payments) {
-            paymentsData = result.payments;
-          } else if (result.data) {
-            paymentsData = result.data;
-          } else {
-            paymentsData = [];
-          }
-        } catch (jsonError) {
-          console.error('Error parsing payments JSON:', jsonError);
-          paymentsData = [];
+    if (!response.ok) {
+      console.warn('Payments API failed');
+      return [];
+    }
+
+    const result = await response.json();
+    
+    // Handle different response formats
+    if (Array.isArray(result)) {
+      return result;
+    } else if (result.payments) {
+      return result.payments;
+    } else if (result.data) {
+      return result.data;
+    }
+    
+    return [];
+  } catch (error) {
+    console.error('Error fetching payments:', error);
+    return [];
+  }
+}
+
+async function fetchMaintenanceRequests(){
+  try {
+    const baseUrl = process.env.NEXTAUTH_URL || process.env.VERCEL_URL || 'http://localhost:3000';
+    const response = await fetch(`${baseUrl}/api/maintenance?limit=5`, {
+      next: { revalidate: 300 }, // Revalidate every 5 minutes
+      headers: {
+        'Content-Type': 'application/json',
+      }
+    });
+
+    if (!response.ok) {
+      return [];
+    }
+
+    const result = await response.json();
+    
+    if (Array.isArray(result)) {
+      return result;
+    } else if (result.maintenance) {
+      return result.maintenance;
+    } else if (result.data) {
+      return result.data;
+    }
+    
+    return [];
+  } catch (error) {
+    console.error('Error fetching maintenance requests:', error);
+    return [];
+  }
+}
+
+async function calculateFallbackStats(statsData) {
+  try {
+    const baseUrl = process.env.NEXTAUTH_URL || process.env.VERCEL_URL || 'http://localhost:3000';
+    
+    const [propertiesRes, leasesRes] = await Promise.allSettled([
+      fetch(`${baseUrl}/api/properties`, {
+        next: { revalidate: 3600 }, // Properties change less frequently
+        headers: { 'Content-Type': 'application/json' }
+      }),
+      fetch(`${baseUrl}/api/leases?status=active`, {
+        next: { revalidate: 300 },
+        headers: { 'Content-Type': 'application/json' }
+      })
+    ]);
+
+    // Get properties count
+    if (propertiesRes.status === 'fulfilled' && propertiesRes.value?.ok) {
+      try {
+        const propertiesResult = await propertiesRes.value.json();
+        
+        if (propertiesResult.pagination?.totalCount) {
+          statsData.properties = propertiesResult.pagination.totalCount;
+        } else if (propertiesResult.totalCount) {
+          statsData.properties = propertiesResult.totalCount;
+        } else if (Array.isArray(propertiesResult)) {
+          statsData.properties = propertiesResult.length;
+        } else if (propertiesResult.data && Array.isArray(propertiesResult.data)) {
+          statsData.properties = propertiesResult.data.length;
         }
-      } else {
-        console.warn('Payments API failed:', paymentsRes.reason || 'Unknown error');
+      } catch (error) {
+        console.error('Error parsing properties fallback data:', error);
       }
+    }
 
-      // Process stats data
-      let statsData = {
+    // Get tenants count and calculate other stats from leases
+    if (leasesRes.status === 'fulfilled' && leasesRes.value?.ok) {
+      try {
+        const leasesResult = await leasesRes.value.json();
+        
+        let leases = [];
+        if (Array.isArray(leasesResult)) {
+          leases = leasesResult;
+        } else if (leasesResult.leases && Array.isArray(leasesResult.leases)) {
+          leases = leasesResult.leases;
+        } else if (leasesResult.data && Array.isArray(leasesResult.data)) {
+          leases = leasesResult.data;
+        }
+        
+        if (leases.length > 0) {
+          // Active tenants = active leases
+          statsData.tenants = leases.length;
+          
+          // Calculate total monthly rent
+          statsData.rent = leases.reduce((sum, lease) => {
+            return sum + (lease.monthlyRent || 0);
+          }, 0);
+          
+          // Calculate occupancy rate
+          if (statsData.properties > 0) {
+            statsData.occupancy = Math.round((leases.length / statsData.properties) * 100);
+          }
+          
+          // Calculate overdue rentals
+          const currentDate = new Date();
+          const overdueLeases = leases.filter((lease) => {
+            const balanceDue = lease.balanceDue || 0;
+            const nextPaymentDue = lease.nextPaymentDue ? new Date(lease.nextPaymentDue) : null;
+            return balanceDue > 0 && nextPaymentDue && nextPaymentDue < currentDate;
+          });
+          
+          statsData.overdueRentals = overdueLeases.length;
+          statsData.overdueAmount = overdueLeases.reduce((sum, lease) => {
+            return sum + (lease.balanceDue || 0);
+          }, 0);
+        }
+      } catch (error) {
+        console.error('Error parsing leases fallback data:', error);
+      }
+    }
+    
+    return statsData;
+  } catch (fallbackError) {
+    console.error('Error calculating fallback stats:', fallbackError);
+    return statsData;
+  }
+}
+
+async function getDashboardData() {
+  try {
+    // Fetch all data in parallel
+    const [stats, payments, maintenance] = await Promise.allSettled([
+      fetchDashboardStats(),
+      fetchRecentPayments(),
+      fetchMaintenanceRequests()
+    ]);
+
+    return {
+      stats: stats.status === 'fulfilled' ? stats.value : {
         properties: 0,
         tenants: 0,
         rent: 0,
         occupancy: 0,
         overdueRentals: 0,
         overdueAmount: 0
-      };
-      
-      if (statsRes.status === 'fulfilled' && statsRes.value?.ok) {
-        try {
-          const result = await statsRes.value.json();
-          console.log('Stats data received:', result);
-          statsData = { ...statsData, ...result };
-        } catch (jsonError) {
-          console.error('Error parsing stats JSON:', jsonError);
-          await calculateFallbackStats(statsData);
-        }
-      } else {
-        console.warn('Stats API failed, calculating fallback stats...');
-        await calculateFallbackStats(statsData);
-      }
-
-      // For now, set empty maintenance until you have the API
-      const maintenanceData = [];
-
-      setDashboardData({
-        payments: Array.isArray(paymentsData) ? paymentsData : [],
-        maintenance: Array.isArray(maintenanceData) ? maintenanceData : [],
-        stats: statsData
-      });
-
-      setError('');
-      console.log('Dashboard data updated successfully');
-    } catch (err) {
-      console.error('Error fetching dashboard data:', err);
-      setError(err.message);
-      
-      // Set fallback data on error
-      setDashboardData(prev => ({
-        ...prev,
-        stats: {
-          properties: 0,
-          tenants: 0,
-          rent: 0,
-          occupancy: 0,
-          overdueRentals: 0,
-          overdueAmount: 0
-        }
-      }));
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  };
-
-  const calculateFallbackStats = async (statsData) => {
-    try {
-      console.log('Calculating fallback stats...');
-      
-      // Try to get basic counts from individual endpoints
-      const [propertiesRes, leasesRes] = await Promise.allSettled([
-        fetch('/api/properties'),
-        fetch('/api/leases?status=active')
-      ]);
-
-      // Get properties count
-      if (propertiesRes.status === 'fulfilled' && propertiesRes.value?.ok) {
-        try {
-          const propertiesResult = await propertiesRes.value.json();
-          console.log('Properties fallback data:', propertiesResult);
-          
-          if (propertiesResult.pagination?.totalCount) {
-            statsData.properties = propertiesResult.pagination.totalCount;
-          } else if (propertiesResult.totalCount) {
-            statsData.properties = propertiesResult.totalCount;
-          } else if (Array.isArray(propertiesResult)) {
-            statsData.properties = propertiesResult.length;
-          } else if (propertiesResult.data && Array.isArray(propertiesResult.data)) {
-            statsData.properties = propertiesResult.data.length;
-          }
-        } catch (error) {
-          console.error('Error parsing properties fallback data:', error);
-        }
-      }
-
-      // Get tenants count and calculate other stats from leases
-      if (leasesRes.status === 'fulfilled' && leasesRes.value?.ok) {
-        try {
-          const leasesResult = await leasesRes.value.json();
-          console.log('Leases fallback data:', leasesResult);
-          
-          let leases = [];
-          if (Array.isArray(leasesResult)) {
-            leases = leasesResult;
-          } else if (leasesResult.leases && Array.isArray(leasesResult.leases)) {
-            leases = leasesResult.leases;
-          } else if (leasesResult.data && Array.isArray(leasesResult.data)) {
-            leases = leasesResult.data;
-          }
-          
-          if (leases.length > 0) {
-            // Active tenants = active leases
-            statsData.tenants = leases.length;
-            
-            // Calculate total monthly rent
-            statsData.rent = leases.reduce((sum, lease) => {
-              return sum + (lease.monthlyRent || 0);
-            }, 0);
-            
-            // Calculate occupancy rate
-            if (statsData.properties > 0) {
-              statsData.occupancy = Math.round((leases.length / statsData.properties) * 100);
-            }
-            
-            // Calculate overdue rentals
-            const currentDate = new Date();
-            const overdueLeases = leases.filter(lease => {
-              const balanceDue = lease.balanceDue || 0;
-              const nextPaymentDue = lease.nextPaymentDue ? new Date(lease.nextPaymentDue) : null;
-              return balanceDue > 0 && nextPaymentDue && nextPaymentDue < currentDate;
-            });
-            
-            statsData.overdueRentals = overdueLeases.length;
-            statsData.overdueAmount = overdueLeases.reduce((sum, lease) => {
-              return sum + (lease.balanceDue || 0);
-            }, 0);
-          }
-        } catch (error) {
-          console.error('Error parsing leases fallback data:', error);
-        }
-      }
-      
-      console.log('Fallback stats calculated:', statsData);
-    } catch (fallbackError) {
-      console.error('Error calculating fallback stats:', fallbackError);
-    }
-  };
-
-  useEffect(() => {
-    fetchDashboardData();
-  }, []);
-
-  const handleRefresh = () => {
-    fetchDashboardData(true);
-  };
-
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-gray-50">
-        <div className="container mx-auto p-4">
-          <div className="flex items-center justify-between mb-6">
-            <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
-          </div>
-          <Breadcrumbs />
-          <div className="flex items-center justify-center h-64">
-            <div className="text-center">
-              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto"></div>
-              <p className="text-gray-600 mt-4">Loading dashboard data...</p>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
+      },
+      payments: payments.status === 'fulfilled' ? payments.value : [],
+      maintenance: maintenance.status === 'fulfilled' ? maintenance.value : [],
+      error: stats.status === 'rejected' || payments.status === 'rejected' || maintenance.status === 'rejected' 
+        ? 'Some dashboard data may be incomplete or unavailable' 
+        : undefined
+    };
+  } catch (error) {
+    console.error('Error fetching dashboard data:', error);
+    return {
+      stats: {
+        properties: 0,
+        tenants: 0,
+        rent: 0,
+        occupancy: 0,
+        overdueRentals: 0,
+        overdueAmount: 0
+      },
+      payments: [],
+      maintenance: [],
+      error: 'Failed to load dashboard data'
+    };
   }
+}
+
+// Main Dashboard Server Component
+export default async function DashboardPage() {
+  const dashboardData = await getDashboardData();
 
   return (
     <div className="min-h-screen bg-gray-50">
       <div className="container mx-auto p-4">
-        {/* Header */}
-        <div className="flex items-center justify-between mb-6">
-          <div className='mr-2'>
-            <h1 className="text-lg md:text-2xl font-bold text-gray-900">Dashboard</h1>
-            <p className="text-gray-600 hidden md:block">Welcome back! Here's your property overview.</p>
-          </div>
-          <div className="flex items-center space-x-2 md:space-x-3">
-            <button
-              onClick={handleRefresh}
-              disabled={refreshing}
-              className="inline-flex items-center px-3 py-2 md:border md:border-gray-300 rounded-md text-sm font-medium text-gray-700 bg-gray-50 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            >
-              <RefreshCw className={`w-4 h-4 md:mr-2 ${refreshing ? 'animate-spin' : ''}`} />
-              <p className='hidden md:block'>{refreshing ? 'Refreshing...' : 'Refresh'}</p>
-            </button>
-            <Link
-              href="/dashboard/analytics"
-              className="inline-flex items-center px-3 py-2 bg-blue-600 text-white rounded-md text-sm font-medium hover:bg-blue-700 transition-colors"
-            >
-              <EyeIcon className={`w-4 h-4 md:mr-2`}></EyeIcon>
-              <span className='hidden md:block'>View Analytics</span>
-            </Link>
-          </div>
-        </div>
+        {/* Header with client-side refresh functionality */}
+        <DashboardHeader />
         
         <Breadcrumbs />
         
         {/* Error Display */}
-        {error && (
-          <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-6">
-            <div className="flex items-start">
-              <AlertCircle className="w-5 h-5 text-yellow-600 mt-0.5 mr-3 flex-shrink-0" />
-              <div>
-                <h3 className="text-sm font-medium text-yellow-800">
-                  Dashboard Data Warning
-                </h3>
-                <p className="text-sm text-yellow-700 mt-1">
-                  Some dashboard data may be incomplete or unavailable. The system is displaying available information.
-                </p>
-                {process.env.NODE_ENV === 'development' && (
-                  <details className="mt-2">
-                    <summary className="text-xs text-yellow-600 cursor-pointer hover:text-yellow-800">
-                      Technical Details (Dev Mode)
-                    </summary>
-                    <p className="text-xs text-yellow-600 mt-1 font-mono bg-yellow-100 p-2 rounded">
-                      {error}
-                    </p>
-                  </details>
-                )}
-              </div>
-            </div>
-          </div>
+        {dashboardData.error && (
+          <ErrorDisplay error={dashboardData.error} />
         )}
         
         {/* Dashboard Stats */}
@@ -372,3 +327,12 @@ export default function DashboardPage() {
     </div>
   );
 }
+
+// Generate metadata for the page
+export const metadata = {
+  title: 'Dashboard | Property Management',
+  description: 'Property management dashboard with overview of properties, tenants, and recent activity.',
+};
+
+// Optional: Add revalidation at the page level
+export const revalidate = 300; // Revalidate every 5 minutes
