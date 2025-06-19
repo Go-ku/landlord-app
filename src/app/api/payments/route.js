@@ -1,36 +1,38 @@
-// app/api/payments/route.js - Updated with role-based access
-import { getToken } from 'next-auth/jwt';
-import Payment from 'models/Payment';
-import User from 'models/User';
-import Property from 'models/Property';
-import Lease from 'models/Lease';
+// app/api/payments/route.js - Updated for Next.js 15 compatibility
+import { NextResponse } from 'next/server';
+import { getServerSession } from 'next-auth';
+import { authOptions } from '../auth/[...nextauth]/route';
 import dbConnect from 'lib/db';
+import mongoose from 'mongoose';
+import Payment from 'models';
+import User from 'models';
+import Lease from 'models';
+import Property from 'models';
 
-async function getUserFromToken(request) {
-  try {
-    const token = await getToken({ 
-      req: request,
-      secret: process.env.NEXTAUTH_SECRET 
-    });
-    return token;
-  } catch (error) {
-    console.error('Error getting token:', error);
-    return null;
-  }
+// Helper function to get models
+function getModels() {
+  return {
+    Payment: mongoose.model('Payment'),
+    User: mongoose.model('User'),
+    Property: mongoose.model('Property'),
+    Lease: mongoose.model('Lease')
+  };
 }
 
 // GET - Fetch payments with role-based filtering
 export async function GET(request) {
   try {
-    const token = await getUserFromToken(request);
+    await dbConnect();
     
-    if (!token?.id) {
-      return Response.json({ error: 'Unauthorized - No valid session' }, { status: 401 });
+    const session = await getServerSession(authOptions);
+    
+    if (!session?.user?.id) {
+      return NextResponse.json({ error: 'Unauthorized - No valid session' }, { status: 401 });
     }
 
-    await dbConnect();
-
+    const { Payment, Property } = getModels();
     const { searchParams } = new URL(request.url);
+    
     const status = searchParams.get('status');
     const sortBy = searchParams.get('sortBy') || 'newest';
     const page = parseInt(searchParams.get('page')) || 1;
@@ -39,17 +41,17 @@ export async function GET(request) {
     // Role-based filtering
     let filter = {};
     
-    if (token.role === 'tenant') {
+    if (session.user.role === 'tenant') {
       // Tenants can only see their own payments
-      filter.tenant = token.id;
-    } else if (token.role === 'landlord') {
+      filter.tenant = session.user.id;
+    } else if (session.user.role === 'landlord') {
       // Landlords can see payments for their properties
-      const landlordProperties = await Property.find({ landlord: token.id }).select('_id');
+      const landlordProperties = await Property.find({ landlord: session.user.id }).select('_id');
       const propertyIds = landlordProperties.map(p => p._id);
       filter.property = { $in: propertyIds };
-    } else if (!['manager', 'admin'].includes(token.role)) {
+    } else if (!['manager', 'admin'].includes(session.user.role)) {
       // Other roles have no access
-      return Response.json({ error: 'Forbidden - Insufficient permissions' }, { status: 403 });
+      return NextResponse.json({ error: 'Forbidden - Insufficient permissions' }, { status: 403 });
     }
     // Managers and admins can see all payments (no additional filter)
 
@@ -97,7 +99,7 @@ export async function GET(request) {
         .populate('tenant', 'name email firstName lastName')
         .populate('property', 'address type name')
         .populate('lease', 'monthlyRent')
-        .populate('recordedBy', 'name email')
+        .populate('recordedBy', 'name email firstName lastName')
         .sort(sort)
         .skip(skip)
         .limit(limit)
@@ -114,22 +116,24 @@ export async function GET(request) {
 
     const totalPages = Math.ceil(totalCount / limit);
 
-    return Response.json({
+    return NextResponse.json({
       success: true,
       payments: populatedPayments,
       pagination: {
         currentPage: page,
         totalPages,
         totalCount,
-        limit
+        limit,
+        hasNextPage: page < totalPages,
+        hasPrevPage: page > 1
       }
     });
 
   } catch (error) {
     console.error('Error fetching payments:', error);
-    return Response.json({ 
+    return NextResponse.json({ 
       error: 'Failed to fetch payments',
-      details: error.message 
+      details: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
     }, { status: 500 });
   }
 }
@@ -137,67 +141,107 @@ export async function GET(request) {
 // POST - Create payment (for managers/landlords only)
 export async function POST(request) {
   try {
-    const token = await getUserFromToken(request);
+    await connectDB();
     
-    if (!token?.id) {
-      return Response.json({ error: 'Unauthorized - No valid session' }, { status: 401 });
+    const session = await getServerSession(authOptions);
+    
+    if (!session?.user?.id) {
+      return NextResponse.json({ error: 'Unauthorized - No valid session' }, { status: 401 });
     }
 
     // Only managers and landlords can create payments via this endpoint
     // Tenants use the /api/tenant/payments endpoint
-    if (!['manager', 'landlord'].includes(token.role)) {
-      return Response.json({ 
+    if (!['manager', 'landlord', 'admin'].includes(session.user.role)) {
+      return NextResponse.json({ 
         error: 'Forbidden - Only managers and landlords can record payments directly' 
       }, { status: 403 });
     }
 
-    await dbConnect();
+    const { Payment, User, Property } = getModels();
 
-    // Parse form data
-    const formData = await request.formData();
+    // Parse request body (JSON or FormData)
+    let paymentData;
+    const contentType = request.headers.get('content-type');
     
-    const paymentData = {
-      amount: parseFloat(formData.get('amount')),
-      paymentDate: new Date(formData.get('paymentDate')),
-      paymentMethod: formData.get('paymentMethod'),
-      reference: formData.get('reference'),
-      description: formData.get('description') || '',
-      paymentType: formData.get('paymentType') || 'rent',
+    if (contentType?.includes('application/json')) {
+      const body = await request.json();
+      paymentData = {
+        amount: parseFloat(body.amount),
+        paymentDate: new Date(body.paymentDate),
+        paymentMethod: body.paymentMethod,
+        reference: body.reference,
+        description: body.description || '',
+        paymentType: body.paymentType || 'rent',
+        
+        // Get IDs from body
+        tenant: body.tenantId || body.tenant,
+        property: body.propertyId || body.property,
+        lease: body.leaseId || body.lease || null,
+        
+        // Status and approval
+        status: body.status || 'verified',
+        approvalStatus: 'approved',
+        approvedBy: session.user.id,
+        approvedAt: new Date(),
+        
+        // Record who created this
+        recordedBy: session.user.id,
+        receiptUrl: body.receiptUrl || null
+      };
+    } else {
+      // Handle FormData
+      const formData = await request.formData();
       
-      // Get IDs from form
-      tenant: formData.get('tenantId'),
-      property: formData.get('propertyId'),
-      lease: formData.get('leaseId') || null,
-      
-      // Status and approval
-      status: formData.get('status') || 'verified', // Manager-created payments are typically verified
-      approvalStatus: 'approved',
-      approvedBy: token.id,
-      approvedAt: new Date(),
-      
-      // Record who created this
-      recordedBy: token.id
-    };
+      paymentData = {
+        amount: parseFloat(formData.get('amount')),
+        paymentDate: new Date(formData.get('paymentDate')),
+        paymentMethod: formData.get('paymentMethod'),
+        reference: formData.get('reference'),
+        description: formData.get('description') || '',
+        paymentType: formData.get('paymentType') || 'rent',
+        
+        // Get IDs from form
+        tenant: formData.get('tenantId') || formData.get('tenant'),
+        property: formData.get('propertyId') || formData.get('property'),
+        lease: formData.get('leaseId') || formData.get('lease') || null,
+        
+        // Status and approval
+        status: formData.get('status') || 'verified',
+        approvalStatus: 'approved',
+        approvedBy: session.user.id,
+        approvedAt: new Date(),
+        
+        // Record who created this
+        recordedBy: session.user.id
+      };
+
+      // Handle file upload if present
+      const receiptFile = formData.get('receiptFile');
+      if (receiptFile && receiptFile.size > 0) {
+        // TODO: Implement file upload to cloud storage
+        paymentData.receiptUrl = `/uploads/receipts/${Date.now()}-${receiptFile.name}`;
+      }
+    }
 
     // Validate required fields
     if (!paymentData.amount || paymentData.amount <= 0) {
-      return Response.json({ error: 'Valid payment amount is required' }, { status: 400 });
+      return NextResponse.json({ error: 'Valid payment amount is required' }, { status: 400 });
     }
 
     if (!paymentData.tenant) {
-      return Response.json({ error: 'Tenant is required' }, { status: 400 });
+      return NextResponse.json({ error: 'Tenant is required' }, { status: 400 });
     }
 
     if (!paymentData.property) {
-      return Response.json({ error: 'Property is required' }, { status: 400 });
+      return NextResponse.json({ error: 'Property is required' }, { status: 400 });
     }
 
     if (!paymentData.paymentMethod) {
-      return Response.json({ error: 'Payment method is required' }, { status: 400 });
+      return NextResponse.json({ error: 'Payment method is required' }, { status: 400 });
     }
 
     if (!paymentData.reference?.trim()) {
-      return Response.json({ error: 'Payment reference is required' }, { status: 400 });
+      return NextResponse.json({ error: 'Payment reference is required' }, { status: 400 });
     }
 
     // Verify the tenant and property exist
@@ -207,46 +251,45 @@ export async function POST(request) {
     ]);
 
     if (!tenant) {
-      return Response.json({ error: 'Tenant not found' }, { status: 404 });
+      return NextResponse.json({ error: 'Tenant not found' }, { status: 404 });
     }
 
     if (!property) {
-      return Response.json({ error: 'Property not found' }, { status: 404 });
+      return NextResponse.json({ error: 'Property not found' }, { status: 404 });
     }
 
     // For landlords, verify they own the property
-    if (token.role === 'landlord' && property.landlord.toString() !== token.id) {
-      return Response.json({ 
+    if (session.user.role === 'landlord' && property.landlord.toString() !== session.user.id) {
+      return NextResponse.json({ 
         error: 'You can only record payments for your own properties' 
       }, { status: 403 });
-    }
-
-    // Handle file upload if present
-    const receiptFile = formData.get('receiptFile');
-    if (receiptFile && receiptFile.size > 0) {
-      // TODO: Implement file upload to cloud storage
-      paymentData.receiptUrl = `/uploads/receipts/${Date.now()}-${receiptFile.name}`;
     }
 
     // Create the payment
     const payment = new Payment(paymentData);
     
     // Add to approval history
+    if (!payment.approvalHistory) {
+      payment.approvalHistory = [];
+    }
+    
     payment.approvalHistory.push({
       action: 'approved',
-      user: token.id,
-      notes: `Payment recorded by ${token.role}`
+      user: session.user.id,
+      notes: `Payment recorded by ${session.user.role}`,
+      timestamp: new Date()
     });
 
     await payment.save();
 
     // Populate the created payment
     const populatedPayment = await Payment.findById(payment._id)
-      .populate('tenant', 'name email')
-      .populate('property', 'address type')
-      .populate('lease', 'monthlyRent');
+      .populate('tenant', 'name email firstName lastName')
+      .populate('property', 'address type name')
+      .populate('lease', 'monthlyRent')
+      .populate('recordedBy', 'name email firstName lastName');
 
-    return Response.json({
+    return NextResponse.json({
       success: true,
       data: populatedPayment,
       message: 'Payment recorded successfully'
@@ -254,9 +297,9 @@ export async function POST(request) {
 
   } catch (error) {
     console.error('Error creating payment:', error);
-    return Response.json({ 
+    return NextResponse.json({ 
       error: 'Failed to record payment',
-      details: error.message 
+      details: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
     }, { status: 500 });
   }
 }
@@ -264,51 +307,77 @@ export async function POST(request) {
 // PUT - Update payment
 export async function PUT(request) {
   try {
-    const token = await getUserFromToken(request);
+    await connectDB();
     
-    if (!token?.id) {
-      return Response.json({ error: 'Unauthorized - No valid session' }, { status: 401 });
+    const session = await getServerSession(authOptions);
+    
+    if (!session?.user?.id) {
+      return NextResponse.json({ error: 'Unauthorized - No valid session' }, { status: 401 });
     }
 
-    // Only managers can update payments
-    if (token.role !== 'manager') {
-      return Response.json({ 
-        error: 'Forbidden - Only managers can update payments' 
+    // Only managers and admins can update payments
+    if (!['manager', 'admin'].includes(session.user.role)) {
+      return NextResponse.json({ 
+        error: 'Forbidden - Only managers and admins can update payments' 
       }, { status: 403 });
     }
 
-    await dbConnect();
-
+    const { Payment } = getModels();
     const { searchParams } = new URL(request.url);
     const paymentId = searchParams.get('id');
 
     if (!paymentId) {
-      return Response.json({ error: 'Payment ID is required' }, { status: 400 });
+      return NextResponse.json({ error: 'Payment ID is required' }, { status: 400 });
     }
 
-    // Parse form data
-    const formData = await request.formData();
+    // Parse request body
+    let updateData;
+    const contentType = request.headers.get('content-type');
     
-    const updateData = {
-      amount: parseFloat(formData.get('amount')),
-      paymentDate: new Date(formData.get('paymentDate')),
-      paymentMethod: formData.get('paymentMethod'),
-      reference: formData.get('reference'),
-      description: formData.get('description') || '',
-      status: formData.get('status'),
-      approvalStatus: formData.get('status') === 'verified' ? 'approved' : formData.get('approvalStatus')
-    };
+    if (contentType?.includes('application/json')) {
+      const body = await request.json();
+      updateData = {
+        amount: body.amount ? parseFloat(body.amount) : undefined,
+        paymentDate: body.paymentDate ? new Date(body.paymentDate) : undefined,
+        paymentMethod: body.paymentMethod,
+        reference: body.reference,
+        description: body.description,
+        status: body.status,
+        approvalStatus: body.status === 'verified' ? 'approved' : body.approvalStatus,
+        receiptUrl: body.receiptUrl
+      };
+    } else {
+      // Handle FormData
+      const formData = await request.formData();
+      
+      updateData = {
+        amount: formData.get('amount') ? parseFloat(formData.get('amount')) : undefined,
+        paymentDate: formData.get('paymentDate') ? new Date(formData.get('paymentDate')) : undefined,
+        paymentMethod: formData.get('paymentMethod'),
+        reference: formData.get('reference'),
+        description: formData.get('description') || '',
+        status: formData.get('status'),
+        approvalStatus: formData.get('status') === 'verified' ? 'approved' : formData.get('approvalStatus')
+      };
 
-    // Handle file upload/removal
-    const receiptFile = formData.get('receiptFile');
-    const removeExistingReceipt = formData.get('removeExistingReceipt') === 'true';
+      // Handle file upload/removal
+      const receiptFile = formData.get('receiptFile');
+      const removeExistingReceipt = formData.get('removeExistingReceipt') === 'true';
 
-    if (removeExistingReceipt) {
-      updateData.receiptUrl = null;
-    } else if (receiptFile && receiptFile.size > 0) {
-      // TODO: Implement file upload to cloud storage
-      updateData.receiptUrl = `/uploads/receipts/${Date.now()}-${receiptFile.name}`;
+      if (removeExistingReceipt) {
+        updateData.receiptUrl = null;
+      } else if (receiptFile && receiptFile.size > 0) {
+        // TODO: Implement file upload to cloud storage
+        updateData.receiptUrl = `/uploads/receipts/${Date.now()}-${receiptFile.name}`;
+      }
     }
+
+    // Remove undefined values
+    Object.keys(updateData).forEach(key => {
+      if (updateData[key] === undefined) {
+        delete updateData[key];
+      }
+    });
 
     // Update the payment
     const payment = await Payment.findByIdAndUpdate(
@@ -316,15 +385,30 @@ export async function PUT(request) {
       updateData,
       { new: true, runValidators: true }
     )
-    .populate('tenant', 'name email')
-    .populate('property', 'address type')
-    .populate('lease', 'monthlyRent');
+    .populate('tenant', 'name email firstName lastName')
+    .populate('property', 'address type name')
+    .populate('lease', 'monthlyRent')
+    .populate('recordedBy', 'name email firstName lastName');
 
     if (!payment) {
-      return Response.json({ error: 'Payment not found' }, { status: 404 });
+      return NextResponse.json({ error: 'Payment not found' }, { status: 404 });
     }
 
-    return Response.json({
+    // Add to approval history
+    if (!payment.approvalHistory) {
+      payment.approvalHistory = [];
+    }
+    
+    payment.approvalHistory.push({
+      action: 'updated',
+      user: session.user.id,
+      notes: `Payment updated by ${session.user.role}`,
+      timestamp: new Date()
+    });
+
+    await payment.save();
+
+    return NextResponse.json({
       success: true,
       data: payment,
       message: 'Payment updated successfully'
@@ -332,9 +416,9 @@ export async function PUT(request) {
 
   } catch (error) {
     console.error('Error updating payment:', error);
-    return Response.json({ 
+    return NextResponse.json({ 
       error: 'Failed to update payment',
-      details: error.message 
+      details: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
     }, { status: 500 });
   }
 }
@@ -342,26 +426,27 @@ export async function PUT(request) {
 // DELETE - Cancel payment
 export async function DELETE(request) {
   try {
-    const token = await getUserFromToken(request);
+    await connectDB();
     
-    if (!token?.id) {
-      return Response.json({ error: 'Unauthorized - No valid session' }, { status: 401 });
+    const session = await getServerSession(authOptions);
+    
+    if (!session?.user?.id) {
+      return NextResponse.json({ error: 'Unauthorized - No valid session' }, { status: 401 });
     }
 
-    // Only managers can cancel payments
-    if (token.role !== 'manager') {
-      return Response.json({ 
-        error: 'Forbidden - Only managers can cancel payments' 
+    // Only managers and admins can cancel payments
+    if (!['manager', 'admin'].includes(session.user.role)) {
+      return NextResponse.json({ 
+        error: 'Forbidden - Only managers and admins can cancel payments' 
       }, { status: 403 });
     }
 
-    await dbConnect();
-
+    const { Payment } = getModels();
     const { searchParams } = new URL(request.url);
     const paymentId = searchParams.get('id');
 
     if (!paymentId) {
-      return Response.json({ error: 'Payment ID is required' }, { status: 400 });
+      return NextResponse.json({ error: 'Payment ID is required' }, { status: 400 });
     }
 
     // Update payment status to cancelled
@@ -370,34 +455,41 @@ export async function DELETE(request) {
       { 
         status: 'cancelled',
         approvalStatus: 'rejected',
-        rejectionReason: 'Payment cancelled by manager'
+        rejectionReason: 'Payment cancelled by manager',
+        cancelledBy: session.user.id,
+        cancelledAt: new Date()
       },
       { new: true }
     );
 
     if (!payment) {
-      return Response.json({ error: 'Payment not found' }, { status: 404 });
+      return NextResponse.json({ error: 'Payment not found' }, { status: 404 });
     }
 
     // Add to approval history
+    if (!payment.approvalHistory) {
+      payment.approvalHistory = [];
+    }
+    
     payment.approvalHistory.push({
-      action: 'rejected',
-      user: token.id,
-      notes: 'Payment cancelled by manager'
+      action: 'cancelled',
+      user: session.user.id,
+      notes: `Payment cancelled by ${session.user.role}`,
+      timestamp: new Date()
     });
 
     await payment.save();
 
-    return Response.json({
+    return NextResponse.json({
       success: true,
       message: 'Payment cancelled successfully'
     });
 
   } catch (error) {
     console.error('Error cancelling payment:', error);
-    return Response.json({ 
+    return NextResponse.json({ 
       error: 'Failed to cancel payment',
-      details: error.message 
+      details: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
     }, { status: 500 });
   }
 }

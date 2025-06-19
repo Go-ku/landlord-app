@@ -1,11 +1,23 @@
-// app/dashboard/page.tsx (Server Component)
+// Solution 1: Direct Database Access in Server Component
+// app/dashboard/page.tsx (Updated Server Component)
 import Link from 'next/link';
+import { getServerSession } from 'next-auth';
+import { authOptions } from '@/app/api/auth/[...nextauth]/route';
+import { redirect } from 'next/navigation';
 import DashboardStats from '@/components/dashboard/DashboardStats';
 import RecentPayments from '@/components/dashboard/RecentPayments';
 import MaintenanceStatus from '@/components/dashboard/MaintenanceStatus';
 import Breadcrumbs from '@/components/Breadcrumbs';
 import DashboardHeader from '@/components/dashboard/DashboardHeader';
 import ErrorDisplay from '@/components/dashboard/ErrorDisplay';
+import dbConnect from 'lib/db';
+// Import models
+import Payment from 'models';
+import Property from 'models';
+import Lease from 'models';
+import User from 'models';
+import Maintenance from 'models/Maintenance';
+import mongoose from 'mongoose';
 import { 
   Plus,
   Home,
@@ -15,8 +27,20 @@ import {
 } from 'lucide-react';
 
 
-// Server-side data fetching functions
-async function fetchDashboardStats() {
+
+// Helper function to get models
+function getModels() {
+  return {
+    Payment: mongoose.model('Payment'),
+    Property: mongoose.model('Property'),
+    Lease: mongoose.model('Lease'),
+    User: mongoose.model('User'),
+    Maintenance: mongoose.model('Maintenance')
+  };
+}
+
+// Server-side data fetching functions (Updated to use direct DB access)
+async function fetchDashboardStats(userId, userRole) {
   const defaultStats = {
     properties: 0,
     tenants: 0,
@@ -27,185 +51,146 @@ async function fetchDashboardStats() {
   };
 
   try {
-    const baseUrl = process.env.NEXTAUTH_URL || process.env.VERCEL_URL || 'http://localhost:3000';
-    const response = await fetch(`${baseUrl}/api/dashboard/stats`, {
-      next: { revalidate: 300 }, // Revalidate every 5 minutes
-      headers: {
-        'Content-Type': 'application/json',
-      }
+    await dbConnect();
+    const { Property, Lease } = getModels();
+
+    let propertyFilter = {};
+    let leaseFilter = {};
+    let propertyIds = []
+    // Apply role-based filtering
+    if (userRole === 'landlord') {
+      propertyFilter = { landlord: userId };
+      // Get landlord's properties first, then filter leases
+      const landlordProperties = await Property.find(propertyFilter).select('_id');
+      propertyIds = landlordProperties.map(p => p._id);
+      
+      leaseFilter = { propertyId: { $in: propertyIds }, status: 'active' };
+    } else if (userRole === 'tenant') {
+      leaseFilter = { tenant: userId, status: 'active' };
+    } else if (['manager', 'admin'].includes(userRole)) {
+      leaseFilter = { status: 'active' };
+    }
+    
+    // Get properties count
+    const propertiesCount = await Property.countDocuments(propertyFilter);
+
+    // Get active leases
+    const leases = await Lease.find(leaseFilter);
+  
+    // Calculate stats
+    const stats = {
+      properties: propertiesCount,
+      tenants: leases.length,
+      rent: leases.reduce((sum, lease) => sum + (lease.monthlyRent || 0), 0),
+      occupancy: propertiesCount > 0 ? Math.round((leases.length / propertiesCount) * 100) : 0,
+      overdueRentals: 0,
+      overdueAmount: 0
+    };
+
+    // Calculate overdue rentals
+    const currentDate = new Date();
+    const overdueLeases = leases.filter(lease => {
+      const balanceDue = lease.balanceDue || 0;
+      const nextPaymentDue = lease.nextPaymentDue ? new Date(lease.nextPaymentDue) : null;
+      return balanceDue > 0 && nextPaymentDue && nextPaymentDue < currentDate;
     });
 
-    if (!response.ok) {
-      console.warn('Stats API failed, calculating fallback stats...');
-      return await calculateFallbackStats(defaultStats);
-    }
+    stats.overdueRentals = overdueLeases.length;
+    stats.overdueAmount = overdueLeases.reduce((sum, lease) => sum + (lease.balanceDue || 0), 0);
 
-    const result = await response.json();
-    return { ...defaultStats, ...result };
+    return stats;
   } catch (error) {
     console.error('Error fetching dashboard stats:', error);
-    return await calculateFallbackStats(defaultStats);
+    return defaultStats;
   }
 }
 
-async function fetchRecentPayments() {
+async function fetchRecentPayments(userId, userRole) {
   try {
-    const baseUrl = process.env.NEXTAUTH_URL || process.env.VERCEL_URL || 'http://localhost:3000';
-    const response = await fetch(`${baseUrl}/api/payments?limit=5`, {
-      next: { revalidate: 60 }, // Revalidate every minute for payments
-      headers: {
-        'Content-Type': 'application/json',
-      }
-    });
+    await dbConnect();
+    const { Payment, Property } = getModels();
 
-    if (!response.ok) {
-      console.warn('Payments API failed');
-      return [];
-    }
+    let filter = {};
 
-    const result = await response.json();
-    
-    // Handle different response formats
-    if (Array.isArray(result)) {
-      return result;
-    } else if (result.payments) {
-      return result.payments;
-    } else if (result.data) {
-      return result.data;
+    // Apply role-based filtering
+    if (userRole === 'tenant') {
+      filter = { tenant: userId };
+    } else if (userRole === 'landlord') {
+      const landlordProperties = await Property.find({ landlord: userId }).select('_id');
+      const propertyIds = landlordProperties.map(p => p._id);
+      filter = { property: { $in: propertyIds } };
     }
-    
-    return [];
+    // Managers and admins can see all payments (no filter)
+
+    const payments = await Payment.find(filter)
+      .populate('tenant', 'firstName lastName name email')
+      .populate('property', 'address city name')
+      .sort({ createdAt: -1 })
+      .limit(5)
+      .lean();
+
+    // Transform for frontend
+    return payments.map(payment => ({
+      id: payment._id.toString(),
+      amount: payment.amount,
+      date: payment.paymentDate || payment.createdAt,
+      tenant: payment.tenant?.firstName ? 
+        `${payment.tenant.firstName} ${payment.tenant.lastName}` : 
+        payment.tenant?.name || 'Unknown',
+      property: payment.property?.address || payment.property?.name || 'Unknown Property',
+      status: payment.status
+    }));
   } catch (error) {
-    console.error('Error fetching payments:', error);
+    console.error('Error fetching recent payments:', error);
     return [];
   }
 }
 
-async function fetchMaintenanceRequests(){
+async function fetchMaintenanceRequests(userId, userRole){
   try {
-    const baseUrl = process.env.NEXTAUTH_URL || process.env.VERCEL_URL || 'http://localhost:3000';
-    const response = await fetch(`${baseUrl}/api/maintenance?limit=5`, {
-      next: { revalidate: 300 }, // Revalidate every 5 minutes
-      headers: {
-        'Content-Type': 'application/json',
-      }
-    });
+    await dbConnect();
+    const { Maintenance, Property } = getModels();
 
-    if (!response.ok) {
-      return [];
-    }
+    let filter = {};
 
-    const result = await response.json();
-    
-    if (Array.isArray(result)) {
-      return result;
-    } else if (result.maintenance) {
-      return result.maintenance;
-    } else if (result.data) {
-      return result.data;
+    // Apply role-based filtering
+    if (userRole === 'tenant') {
+      filter = { tenant: userId };
+    } else if (userRole === 'landlord') {
+      const landlordProperties = await Property.find({ landlord: userId }).select('_id');
+      const propertyIds = landlordProperties.map(p => p._id);
+      filter = { property: { $in: propertyIds } };
     }
-    
-    return [];
+    // Managers and admins can see all requests (no filter)
+
+    const requests = await Maintenance.find(filter)
+      .populate('property', 'address city name')
+      .sort({ createdAt: -1 })
+      .limit(5)
+      .lean();
+
+    // Transform for frontend
+    return requests.map(request => ({
+      id: request._id.toString(),
+      title: request.title || request.description?.substring(0, 50) || 'Maintenance Request',
+      priority: request.priority || 'medium',
+      status: request.status,
+      property: request.property?.address || request.property?.name || 'Unknown Property',
+      date: request.createdAt
+    }));
   } catch (error) {
     console.error('Error fetching maintenance requests:', error);
     return [];
   }
 }
 
-async function calculateFallbackStats(statsData) {
-  try {
-    const baseUrl = process.env.NEXTAUTH_URL || process.env.VERCEL_URL || 'http://localhost:3000';
-    
-    const [propertiesRes, leasesRes] = await Promise.allSettled([
-      fetch(`${baseUrl}/api/properties`, {
-        next: { revalidate: 3600 }, // Properties change less frequently
-        headers: { 'Content-Type': 'application/json' }
-      }),
-      fetch(`${baseUrl}/api/leases?status=active`, {
-        next: { revalidate: 300 },
-        headers: { 'Content-Type': 'application/json' }
-      })
-    ]);
-
-    // Get properties count
-    if (propertiesRes.status === 'fulfilled' && propertiesRes.value?.ok) {
-      try {
-        const propertiesResult = await propertiesRes.value.json();
-        
-        if (propertiesResult.pagination?.totalCount) {
-          statsData.properties = propertiesResult.pagination.totalCount;
-        } else if (propertiesResult.totalCount) {
-          statsData.properties = propertiesResult.totalCount;
-        } else if (Array.isArray(propertiesResult)) {
-          statsData.properties = propertiesResult.length;
-        } else if (propertiesResult.data && Array.isArray(propertiesResult.data)) {
-          statsData.properties = propertiesResult.data.length;
-        }
-      } catch (error) {
-        console.error('Error parsing properties fallback data:', error);
-      }
-    }
-
-    // Get tenants count and calculate other stats from leases
-    if (leasesRes.status === 'fulfilled' && leasesRes.value?.ok) {
-      try {
-        const leasesResult = await leasesRes.value.json();
-        
-        let leases = [];
-        if (Array.isArray(leasesResult)) {
-          leases = leasesResult;
-        } else if (leasesResult.leases && Array.isArray(leasesResult.leases)) {
-          leases = leasesResult.leases;
-        } else if (leasesResult.data && Array.isArray(leasesResult.data)) {
-          leases = leasesResult.data;
-        }
-        
-        if (leases.length > 0) {
-          // Active tenants = active leases
-          statsData.tenants = leases.length;
-          
-          // Calculate total monthly rent
-          statsData.rent = leases.reduce((sum, lease) => {
-            return sum + (lease.monthlyRent || 0);
-          }, 0);
-          
-          // Calculate occupancy rate
-          if (statsData.properties > 0) {
-            statsData.occupancy = Math.round((leases.length / statsData.properties) * 100);
-          }
-          
-          // Calculate overdue rentals
-          const currentDate = new Date();
-          const overdueLeases = leases.filter((lease) => {
-            const balanceDue = lease.balanceDue || 0;
-            const nextPaymentDue = lease.nextPaymentDue ? new Date(lease.nextPaymentDue) : null;
-            return balanceDue > 0 && nextPaymentDue && nextPaymentDue < currentDate;
-          });
-          
-          statsData.overdueRentals = overdueLeases.length;
-          statsData.overdueAmount = overdueLeases.reduce((sum, lease) => {
-            return sum + (lease.balanceDue || 0);
-          }, 0);
-        }
-      } catch (error) {
-        console.error('Error parsing leases fallback data:', error);
-      }
-    }
-    
-    return statsData;
-  } catch (fallbackError) {
-    console.error('Error calculating fallback stats:', fallbackError);
-    return statsData;
-  }
-}
-
-async function getDashboardData() {
+async function getDashboardData(userId, userRole){
   try {
     // Fetch all data in parallel
     const [stats, payments, maintenance] = await Promise.allSettled([
-      fetchDashboardStats(),
-      fetchRecentPayments(),
-      fetchMaintenanceRequests()
+      fetchDashboardStats(userId, userRole),
+      fetchRecentPayments(userId, userRole),
+      fetchMaintenanceRequests(userId, userRole)
     ]);
 
     return {
@@ -220,7 +205,7 @@ async function getDashboardData() {
       payments: payments.status === 'fulfilled' ? payments.value : [],
       maintenance: maintenance.status === 'fulfilled' ? maintenance.value : [],
       error: stats.status === 'rejected' || payments.status === 'rejected' || maintenance.status === 'rejected' 
-        ? 'Some dashboard data may be incomplete or unavailable' 
+        ? 'Some dashboard data may be incomplete' 
         : undefined
     };
   } catch (error) {
@@ -243,7 +228,16 @@ async function getDashboardData() {
 
 // Main Dashboard Server Component
 export default async function DashboardPage() {
-  const dashboardData = await getDashboardData();
+  // Get session on the server
+  const session = await getServerSession(authOptions);
+
+  // Redirect if not authenticated
+  if (!session?.user) {
+    redirect('/login');
+  }
+
+  // Fetch dashboard data with user context
+  const dashboardData = await getDashboardData(session.user.id, session.user.role);
 
   return (
     <div className="min-h-screen bg-gray-50">

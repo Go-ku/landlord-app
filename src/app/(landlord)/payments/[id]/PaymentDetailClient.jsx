@@ -1,498 +1,396 @@
+// app/payments/[id]/PaymentDetailClient.js - Client Component
 'use client';
+
 import { useState } from 'react';
+import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { 
   ArrowLeft, 
+  Download, 
   CheckCircle, 
+  XCircle, 
   Clock, 
-  AlertTriangle, 
-  XCircle,
-  Receipt, 
-  DollarSign, 
+  User, 
+  Home, 
   Calendar, 
   CreditCard,
-  User,
-  Home,
   FileText,
-  Download,
-  Mail,
-  MessageSquare,
+  AlertCircle,
   Edit,
   Trash2,
-  Eye,
-  Share2
+  MoreVertical
 } from 'lucide-react';
-import { formatDate, formatDateWithDay } from 'utils/date';
-import { formatCurrency } from 'utils/currency';
 
-export default function PaymentDetailClient({ payment }) {
+export default function PaymentDetailClient({ payment, currentUser }) {
+  const router = useRouter();
   const [loading, setLoading] = useState(false);
-  const [actionLoading, setActionLoading] = useState('');
+  const [showActions, setShowActions] = useState(false);
 
-  const getStatusConfig = (status) => {
+  // Helper functions
+  const formatCurrency = (amount) => {
+    return new Intl.NumberFormat('en-ZM', {
+      style: 'currency',
+      currency: 'ZMW'
+    }).format(amount);
+  };
+
+  const formatDate = (date) => {
+    return new Date(date).toLocaleDateString('en-ZM', {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  };
+
+  const getStatusIcon = (status) => {
     switch (status) {
-      case 'verified':
-        return {
-          color: 'bg-green-100 text-green-800 border-green-200',
-          icon: <CheckCircle className="w-4 h-4" />,
-          label: 'Verified',
-          description: 'Payment has been approved and applied to lease balance'
-        };
+      case 'completed':
+      case 'approved':
+        return <CheckCircle className="w-5 h-5 text-green-500" />;
       case 'pending':
-        return {
-          color: 'bg-yellow-100 text-yellow-800 border-yellow-200',
-          icon: <Clock className="w-4 h-4" />,
-          label: 'Pending Verification',
-          description: 'Payment is awaiting verification by landlord'
-        };
-      case 'disputed':
-        return {
-          color: 'bg-red-100 text-red-800 border-red-200',
-          icon: <AlertTriangle className="w-4 h-4" />,
-          label: 'Disputed',
-          description: 'Payment requires additional verification or clarification'
-        };
+        return <Clock className="w-5 h-5 text-yellow-500" />;
+      case 'failed':
+      case 'rejected':
+        return <XCircle className="w-5 h-5 text-red-500" />;
       case 'cancelled':
-        return {
-          color: 'bg-gray-100 text-gray-800 border-gray-200',
-          icon: <XCircle className="w-4 h-4" />,
-          label: 'Cancelled',
-          description: 'Payment has been cancelled and reversed'
-        };
+        return <XCircle className="w-5 h-5 text-gray-500" />;
       default:
-        return {
-          color: 'bg-gray-100 text-gray-800 border-gray-200',
-          icon: <Clock className="w-4 h-4" />,
-          label: status,
-          description: 'Unknown status'
-        };
+        return <AlertCircle className="w-5 h-5 text-gray-500" />;
     }
   };
 
-  const handleVerifyPayment = async () => {
-    setActionLoading('verify');
+  const getStatusColor = (status) => {
+    switch (status) {
+      case 'completed':
+      case 'approved':
+        return 'bg-green-100 text-green-800 border-green-200';
+      case 'pending':
+        return 'bg-yellow-100 text-yellow-800 border-yellow-200';
+      case 'failed':
+      case 'rejected':
+        return 'bg-red-100 text-red-800 border-red-200';
+      case 'cancelled':
+        return 'bg-gray-100 text-gray-800 border-gray-200';
+      default:
+        return 'bg-gray-100 text-gray-800 border-gray-200';
+    }
+  };
+
+  const canEdit = () => {
+    return ['manager', 'admin'].includes(currentUser.role) || 
+           (currentUser.role === 'landlord' && payment.property?.landlord === currentUser.id);
+  };
+
+  const canApprove = () => {
+    return ['manager', 'admin'].includes(currentUser.role) && 
+           payment.approvalStatus === 'pending';
+  };
+
+  const handleApprove = async () => {
+    if (!confirm('Are you sure you want to approve this payment?')) return;
+    
+    setLoading(true);
     try {
-      const response = await fetch(`/api/payments/${payment._id}/verify`, {
+      const response = await fetch(`/api/payments/${payment._id}/approve`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'verify' })
+        body: JSON.stringify({ notes: 'Approved via payment details' })
       });
-      
+
       if (response.ok) {
-        window.location.reload(); // Refresh to show updated status
+        router.refresh();
       } else {
-        throw new Error('Failed to verify payment');
+        alert('Failed to approve payment');
       }
     } catch (error) {
-      console.error('Error verifying payment:', error);
-      alert('Failed to verify payment. Please try again.');
+      console.error('Error approving payment:', error);
+      alert('Failed to approve payment');
     } finally {
-      setActionLoading('');
+      setLoading(false);
     }
   };
 
-  const handleDisputePayment = async () => {
-    const reason = prompt('Please provide a reason for disputing this payment:');
+  const handleReject = async () => {
+    const reason = prompt('Please provide a reason for rejection:');
     if (!reason) return;
     
-    setActionLoading('dispute');
+    setLoading(true);
     try {
-      const response = await fetch(`/api/payments/${payment._id}/verify`, {
+      const response = await fetch(`/api/payments/${payment._id}/reject`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          action: 'dispute',
-          notes: reason
-        })
+        body: JSON.stringify({ reason })
       });
-      
+
       if (response.ok) {
-        window.location.reload();
+        router.refresh();
       } else {
-        throw new Error('Failed to dispute payment');
+        alert('Failed to reject payment');
       }
     } catch (error) {
-      console.error('Error disputing payment:', error);
-      alert('Failed to dispute payment. Please try again.');
+      console.error('Error rejecting payment:', error);
+      alert('Failed to reject payment');
     } finally {
-      setActionLoading('');
+      setLoading(false);
     }
   };
 
   const handleDownloadReceipt = () => {
-    if (payment.receiptUrl) {
-      const link = document.createElement('a');
-      link.href = payment.receiptUrl;
-      link.download = `Receipt_${payment.reference}_${formatDate(payment.paymentDate)}.${payment.receiptUrl.split('.').pop()}`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-    }
-  };
-
-  const handleSharePayment = async () => {
-    if (navigator.share) {
-      try {
-        await navigator.share({
-          title: `Payment Receipt - ${payment.reference}`,
-          text: `Payment of ${formatCurrency(payment.amount)} received on ${formatDate(payment.paymentDate)}`,
-          url: window.location.href,
-        });
-      } catch (error) {
-        console.log('Share cancelled or failed');
-      }
-    } else {
-      // Fallback - copy to clipboard
-      navigator.clipboard.writeText(window.location.href);
-      alert('Payment link copied to clipboard!');
-    }
-  };
-
-  const statusConfig = getStatusConfig(payment.status);
-  const propertyName = payment.propertyId?.address || payment.propertyId?.name || 'Unknown Property';
-  const tenantName = payment.tenantId?.name || 
-    `${payment.tenantId?.firstName} ${payment.tenantId?.lastName}` || 
-    'Unknown Tenant';
-
-  const paymentMethods = {
-    bank_transfer: 'Bank Transfer',
-    mobile_money: 'Mobile Money',
-    cash: 'Cash',
-    cheque: 'Cheque',
-    card: 'Card Payment',
-    other: 'Other'
+    // TODO: Implement receipt download
+    alert('Receipt download will be implemented');
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 py-8 px-4">
-      <div className="max-w-6xl mx-auto">
+    <div className="min-h-screen bg-gray-50">
+      <div className="container mx-auto p-4 max-w-4xl">
         {/* Header */}
-        <div className="mb-6">
-          <Link 
-            href="/payments" 
-            className="inline-flex items-center text-blue-600 hover:text-blue-800 mb-4"
-          >
-            <ArrowLeft className="w-4 h-4 mr-2" />
-            Back to Payments
-          </Link>
-          
-          <div className="bg-white rounded-lg shadow p-6">
-            <div className="flex flex-col md:flex-row md:items-center md:justify-between">
-              <div>
-                <h1 className="text-2xl font-bold text-gray-900 mb-2 flex items-center">
-                  <Receipt className="w-6 h-6 mr-3 text-blue-600" />
-                  Payment Details
-                </h1>
-                <p className="text-gray-600">
-                  Reference: <span className="font-mono font-medium">{payment.reference}</span>
-                </p>
-                <p className="text-gray-600">
-                  Recorded on {formatDate(payment.createdAt)}
-                </p>
-              </div>
-              
-              <div className="flex items-center space-x-3 mt-4 md:mt-0">
-                <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium border ${statusConfig.color}`}>
-                  {statusConfig.icon}
-                  <span className="ml-2">{statusConfig.label}</span>
-                </span>
-              </div>
+        <div className="flex items-center justify-between mb-6">
+          <div className="flex items-center space-x-4">
+            <button
+              onClick={() => router.back()}
+              className="flex items-center text-gray-600 hover:text-gray-900 transition-colors"
+            >
+              <ArrowLeft className="w-5 h-5 mr-2" />
+              Back
+            </button>
+            <div>
+              <h1 className="text-2xl font-bold text-gray-900">
+                Payment Details
+              </h1>
+              <p className="text-gray-600">
+                Receipt #{payment.receiptNumber}
+              </p>
             </div>
+          </div>
+
+          {/* Actions Menu */}
+          <div className="relative">
+            <button
+              onClick={() => setShowActions(!showActions)}
+              className="flex items-center px-3 py-2 text-gray-600 hover:text-gray-900 border border-gray-300 rounded-md"
+            >
+              <MoreVertical className="w-4 h-4" />
+            </button>
             
-            {/* Status Description */}
-            <div className="mt-4 p-3 bg-gray-50 rounded-md">
-              <p className="text-sm text-gray-700">{statusConfig.description}</p>
-            </div>
+            {showActions && (
+              <div className="absolute right-0 mt-2 w-48 bg-white rounded-md shadow-lg border border-gray-200 z-10">
+                <div className="py-1">
+                  <button
+                    onClick={handleDownloadReceipt}
+                    className="flex items-center w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
+                  >
+                    <Download className="w-4 h-4 mr-3" />
+                    Download Receipt
+                  </button>
+                  
+                  {canEdit() && (
+                    <Link
+                      href={`/payments/${payment._id}/edit`}
+                      className="flex items-center w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
+                    >
+                      <Edit className="w-4 h-4 mr-3" />
+                      Edit Payment
+                    </Link>
+                  )}
+                  
+                  {canApprove() && (
+                    <>
+                      <button
+                        onClick={handleApprove}
+                        disabled={loading}
+                        className="flex items-center w-full px-4 py-2 text-sm text-green-700 hover:bg-green-50"
+                      >
+                        <CheckCircle className="w-4 h-4 mr-3" />
+                        Approve
+                      </button>
+                      <button
+                        onClick={handleReject}
+                        disabled={loading}
+                        className="flex items-center w-full px-4 py-2 text-sm text-red-700 hover:bg-red-50"
+                      >
+                        <XCircle className="w-4 h-4 mr-3" />
+                        Reject
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Main Content */}
-          <div className="lg:col-span-2 space-y-6">
-            {/* Payment Information */}
-            <div className="bg-white rounded-lg shadow p-6">
-              <h2 className="text-xl font-semibold text-gray-900 mb-4 flex items-center">
-                <DollarSign className="w-5 h-5 mr-2 text-green-600" />
-                Payment Information
-              </h2>
-              
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div>
-                  <h3 className="font-medium text-gray-900 mb-3">Amount & Currency</h3>
-                  <div className="space-y-2">
-                    <div className="flex justify-between">
-                      <span className="text-gray-600">Amount:</span>
-                      <span className="font-semibold text-2xl text-green-600">
-                        {formatCurrency(payment.amount)}
-                      </span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-gray-600">Currency:</span>
-                      <span className="font-medium">{payment.currency}</span>
-                    </div>
-                  </div>
-                </div>
-                
-                <div>
-                  <h3 className="font-medium text-gray-900 mb-3">Payment Details</h3>
-                  <div className="space-y-2">
-                    <div className="flex justify-between">
-                      <span className="text-gray-600">Date:</span>
-                      <span className="font-medium">{formatDateWithDay(payment.paymentDate)}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-gray-600">Method:</span>
-                      <span className="font-medium">{paymentMethods[payment.paymentMethod] || payment.paymentMethod}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-gray-600">Reference:</span>
-                      <span className="font-mono font-medium">{payment.reference}</span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-              
-              {payment.description && (
-                <div className="mt-6">
-                  <h3 className="font-medium text-gray-900 mb-2">Description/Notes</h3>
-                  <p className="text-gray-700 bg-gray-50 p-3 rounded-md">{payment.description}</p>
-                </div>
-              )}
-            </div>
-
-            {/* Lease Information */}
-            <div className="bg-white rounded-lg shadow p-6">
-              <h2 className="text-xl font-semibold text-gray-900 mb-4 flex items-center">
-                <Home className="w-5 h-5 mr-2 text-blue-600" />
-                Lease Information
-              </h2>
-              
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div>
-                  <h3 className="font-medium text-gray-900 mb-2">Property</h3>
-                  <p className="text-gray-700 mb-1">{propertyName}</p>
-                  {payment.propertyId?.type && (
-                    <p className="text-sm text-gray-500">Type: {payment.propertyId.type}</p>
-                  )}
-                  <Link
-                    href={`/properties/${payment.propertyId?._id}`}
-                    className="inline-flex items-center text-blue-600 hover:text-blue-800 text-sm mt-2"
-                  >
-                    View Property Details →
-                  </Link>
-                </div>
-                
-                <div>
-                  <h3 className="font-medium text-gray-900 mb-2">Tenant</h3>
-                  <p className="text-gray-700 mb-1">{tenantName}</p>
-                  {payment.tenantId?.email && (
-                    <p className="text-sm text-gray-500">{payment.tenantId.email}</p>
-                  )}
-                  {payment.tenantId?.phone && (
-                    <p className="text-sm text-gray-500">{payment.tenantId.phone}</p>
-                  )}
-                </div>
-              </div>
-              
-              {payment.leaseId && (
-                <div className="mt-4 pt-4 border-t">
-                  <Link
-                    href={`/leases/${payment.leaseId._id}`}
-                    className="inline-flex items-center text-blue-600 hover:text-blue-800 text-sm"
-                  >
-                    <FileText className="w-4 h-4 mr-2" />
-                    View Full Lease Details →
-                  </Link>
-                </div>
-              )}
-            </div>
-
-            {/* Receipt/Proof */}
-            {payment.receiptUrl && (
-              <div className="bg-white rounded-lg shadow p-6">
-                <h2 className="text-xl font-semibold text-gray-900 mb-4 flex items-center">
-                  <FileText className="w-5 h-5 mr-2 text-purple-600" />
-                  Receipt/Proof
+        {/* Payment Overview */}
+        <div className="bg-white rounded-lg shadow-sm border border-gray-200 mb-6">
+          <div className="p-6">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h2 className="text-3xl font-bold text-gray-900">
+                  {formatCurrency(payment.amount)}
                 </h2>
-                
-                <div className="flex items-center justify-between p-4 border border-gray-200 rounded-lg">
-                  <div className="flex items-center">
-                    <Receipt className="w-8 h-8 text-gray-400 mr-3" />
-                    <div>
-                      <p className="font-medium text-gray-900">Receipt File</p>
-                      <p className="text-sm text-gray-500">Uploaded with payment</p>
-                    </div>
-                  </div>
-                  <div className="flex space-x-2">
-                    <button
-                      onClick={() => window.open(payment.receiptUrl, '_blank')}
-                      className="inline-flex items-center px-3 py-2 text-sm bg-blue-100 text-blue-700 rounded-md hover:bg-blue-200"
-                    >
-                      <Eye className="w-4 h-4 mr-2" />
-                      View
-                    </button>
-                    <button
-                      onClick={handleDownloadReceipt}
-                      className="inline-flex items-center px-3 py-2 text-sm bg-green-100 text-green-700 rounded-md hover:bg-green-200"
-                    >
-                      <Download className="w-4 h-4 mr-2" />
-                      Download
-                    </button>
-                  </div>
-                </div>
+                <p className="text-gray-600 capitalize">
+                  {payment.paymentType} payment
+                </p>
               </div>
-            )}
+              <div className="text-right">
+                <div className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium border ${getStatusColor(payment.status)}`}>
+                  {getStatusIcon(payment.status)}
+                  <span className="ml-2 capitalize">{payment.status}</span>
+                </div>
+                {payment.approvalStatus !== payment.status && (
+                  <div className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium border mt-2 ${getStatusColor(payment.approvalStatus)}`}>
+                    {getStatusIcon(payment.approvalStatus)}
+                    <span className="ml-2 capitalize">{payment.approvalStatus}</span>
+                  </div>
+                )}
+              </div>
+            </div>
 
-            {/* Verification Details */}
-            {payment.verifiedAt && (
-              <div className="bg-white rounded-lg shadow p-6">
-                <h2 className="text-xl font-semibold text-gray-900 mb-4">Verification Details</h2>
-                
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* Payment Details */}
+              <div>
+                <h3 className="text-lg font-semibold text-gray-900 mb-3 flex items-center">
+                  <CreditCard className="w-5 h-5 mr-2" />
+                  Payment Details
+                </h3>
                 <div className="space-y-3">
                   <div className="flex justify-between">
-                    <span className="text-gray-600">Verified Date:</span>
-                    <span className="font-medium">{formatDateWithDay(payment.verifiedAt)}</span>
+                    <span className="text-gray-600">Date:</span>
+                    <span className="font-medium">{formatDate(payment.paymentDate)}</span>
                   </div>
-                  
-                  {payment.verifiedBy && (
+                  <div className="flex justify-between">
+                    <span className="text-gray-600">Method:</span>
+                    <span className="font-medium capitalize">{payment.paymentMethod.replace('_', ' ')}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-600">Reference:</span>
+                    <span className="font-medium">{payment.referenceNumber || 'N/A'}</span>
+                  </div>
+                  {payment.lateFee > 0 && (
                     <div className="flex justify-between">
-                      <span className="text-gray-600">Verified By:</span>
-                      <span className="font-medium">
-                        {payment.verifiedBy.name || `${payment.verifiedBy.firstName} ${payment.verifiedBy.lastName}`}
-                      </span>
-                    </div>
-                  )}
-                  
-                  {payment.verificationNotes && (
-                    <div>
-                      <span className="text-gray-600 block mb-1">Notes:</span>
-                      <p className="text-gray-700 bg-gray-50 p-3 rounded-md">{payment.verificationNotes}</p>
+                      <span className="text-gray-600">Late Fee:</span>
+                      <span className="font-medium text-red-600">{formatCurrency(payment.lateFee)}</span>
                     </div>
                   )}
                 </div>
+              </div>
+
+              {/* Property & Tenant Info */}
+              <div>
+                <h3 className="text-lg font-semibold text-gray-900 mb-3 flex items-center">
+                  <Home className="w-5 h-5 mr-2" />
+                  Property & Tenant
+                </h3>
+                <div className="space-y-3">
+                  <div>
+                    <span className="text-gray-600 block">Property:</span>
+                    <span className="font-medium">{payment.property?.address || payment.property?.name}</span>
+                  </div>
+                  <div>
+                    <span className="text-gray-600 block">Tenant:</span>
+                    <span className="font-medium">
+                      {payment.tenant?.name || 
+                       `${payment.tenant?.firstName} ${payment.tenant?.lastName}`.trim() ||
+                       'Unknown Tenant'}
+                    </span>
+                  </div>
+                  {payment.tenant?.email && (
+                    <div>
+                      <span className="text-gray-600 block">Email:</span>
+                      <span className="font-medium">{payment.tenant.email}</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Description */}
+            {payment.description && (
+              <div className="mt-6 pt-6 border-t border-gray-200">
+                <h3 className="text-lg font-semibold text-gray-900 mb-2 flex items-center">
+                  <FileText className="w-5 h-5 mr-2" />
+                  Description
+                </h3>
+                <p className="text-gray-700">{payment.description}</p>
               </div>
             )}
           </div>
+        </div>
 
-          {/* Sidebar */}
-          <div className="space-y-6">
-            {/* Quick Actions */}
-            <div className="bg-white rounded-lg shadow p-6">
-              <h3 className="text-lg font-semibold text-gray-900 mb-4">Quick Actions</h3>
-              
-              <div className="space-y-2">
-                {payment.status === 'pending' && (
-                  <>
-                    <button
-                      onClick={handleVerifyPayment}
-                      disabled={actionLoading === 'verify'}
-                      className="w-full text-left px-3 py-2 text-sm text-green-700 bg-green-50 hover:bg-green-100 rounded-md flex items-center disabled:opacity-50"
-                    >
-                      <CheckCircle className="w-4 h-4 mr-3" />
-                      {actionLoading === 'verify' ? 'Verifying...' : 'Verify Payment'}
-                    </button>
-                    
-                    <button
-                      onClick={handleDisputePayment}
-                      disabled={actionLoading === 'dispute'}
-                      className="w-full text-left px-3 py-2 text-sm text-red-700 bg-red-50 hover:bg-red-100 rounded-md flex items-center disabled:opacity-50"
-                    >
-                      <AlertTriangle className="w-4 h-4 mr-3" />
-                      {actionLoading === 'dispute' ? 'Disputing...' : 'Dispute Payment'}
-                    </button>
-                  </>
-                )}
-                
-                <button
-                  onClick={handleSharePayment}
-                  className="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-md flex items-center"
-                >
-                  <Share2 className="w-4 h-4 mr-3" />
-                  Share Payment Details
-                </button>
-                
-                <Link
-                  href={`/payments/${payment._id}/edit`}
-                  className="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-md flex items-center block"
-                >
-                  <Edit className="w-4 h-4 mr-3" />
-                  Edit Payment
-                </Link>
-                
-                <Link
-                  href="/payments/record"
-                  className="w-full text-left px-3 py-2 text-sm text-blue-700 bg-blue-50 hover:bg-blue-100 rounded-md flex items-center block"
-                >
-                  <Receipt className="w-4 h-4 mr-3" />
-                  Record New Payment
-                </Link>
-              </div>
-            </div>
-
-            {/* Payment Summary */}
-            <div className="bg-white rounded-lg shadow p-6">
-              <h3 className="text-lg font-semibold text-gray-900 mb-4">Payment Summary</h3>
-              
-              <div className="space-y-3 text-sm">
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Payment ID:</span>
-                  <span className="font-mono text-xs">{payment._id}</span>
-                </div>
-                
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Status:</span>
-                  <span className="font-medium">{statusConfig.label}</span>
-                </div>
-                
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Amount:</span>
-                  <span className="font-medium">{formatCurrency(payment.amount)}</span>
-                </div>
-                
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Date:</span>
-                  <span className="font-medium">{formatDate(payment.paymentDate)}</span>
-                </div>
-                
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Method:</span>
-                  <span className="font-medium">{paymentMethods[payment.paymentMethod]}</span>
-                </div>
-                
-                {payment.receiptUrl && (
-                  <div className="flex justify-between">
-                    <span className="text-gray-600">Receipt:</span>
-                    <span className="text-green-600 font-medium">✓ Available</span>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Timeline */}
-            <div className="bg-white rounded-lg shadow p-6">
-              <h3 className="text-lg font-semibold text-gray-900 mb-4">Timeline</h3>
-              
+        {/* Approval History */}
+        {payment.approvalHistory && payment.approvalHistory.length > 0 && (
+          <div className="bg-white rounded-lg shadow-sm border border-gray-200 mb-6">
+            <div className="p-6">
+              <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
+                <Clock className="w-5 h-5 mr-2" />
+                Approval History
+              </h3>
               <div className="space-y-4">
-                <div className="flex items-start">
-                  <div className="flex-shrink-0 w-2 h-2 mt-2 bg-blue-600 rounded-full"></div>
-                  <div className="ml-3">
-                    <p className="text-sm font-medium text-gray-900">Payment Recorded</p>
-                    <p className="text-xs text-gray-500">{formatDateWithDay(payment.createdAt)}</p>
-                  </div>
-                </div>
-                
-                {payment.verifiedAt && (
-                  <div className="flex items-start">
-                    <div className="flex-shrink-0 w-2 h-2 mt-2 bg-green-600 rounded-full"></div>
-                    <div className="ml-3">
-                      <p className="text-sm font-medium text-gray-900">Payment {payment.status === 'verified' ? 'Verified' : 'Disputed'}</p>
-                      <p className="text-xs text-gray-500">{formatDateWithDay(payment.verifiedAt)}</p>
+                {payment.approvalHistory.map((entry, index) => (
+                  <div key={index} className="flex items-start space-x-3">
+                    <div className={`flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center ${getStatusColor(entry.action)}`}>
+                      {getStatusIcon(entry.action)}
+                    </div>
+                    <div className="flex-1">
+                      <div className="flex items-center justify-between">
+                        <span className="font-medium capitalize">{entry.action}</span>
+                        <span className="text-sm text-gray-500">
+                          {formatDate(entry.timestamp)}
+                        </span>
+                      </div>
+                      {entry.notes && (
+                        <p className="text-gray-600 text-sm mt-1">{entry.notes}</p>
+                      )}
                     </div>
                   </div>
-                )}
+                ))}
               </div>
             </div>
           </div>
+        )}
+
+        {/* Rejection Reason */}
+        {payment.rejectionReason && (
+          <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-6">
+            <div className="flex items-start">
+              <XCircle className="w-5 h-5 text-red-500 mt-0.5 mr-3 flex-shrink-0" />
+              <div>
+                <h3 className="text-sm font-medium text-red-800">Rejection Reason</h3>
+                <p className="text-sm text-red-700 mt-1">{payment.rejectionReason}</p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Quick Actions */}
+        <div className="flex flex-wrap gap-3">
+          <Link
+            href="/payments"
+            className="inline-flex items-center px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 transition-colors"
+          >
+            All Payments
+          </Link>
+          
+          {payment.property && (
+            <Link
+              href={`/properties/${payment.property._id}`}
+              className="inline-flex items-center px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 transition-colors"
+            >
+              <Home className="w-4 h-4 mr-2" />
+              View Property
+            </Link>
+          )}
+          
+          {payment.lease && (
+            <Link
+              href={`/leases/${payment.lease._id}`}
+              className="inline-flex items-center px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 transition-colors"
+            >
+              <FileText className="w-4 h-4 mr-2" />
+              View Lease
+            </Link>
+          )}
         </div>
       </div>
     </div>
