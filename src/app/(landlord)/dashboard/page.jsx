@@ -233,7 +233,7 @@ export default async function DashboardPage() {
 
   // Redirect if not authenticated
   if (!session?.user) {
-    redirect('/login');
+    redirect('/auth/login');
   }
 
   // Fetch dashboard data with user context
