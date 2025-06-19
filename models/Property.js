@@ -32,4 +32,20 @@ const PropertySchema = new mongoose.Schema({
   },
 }, { timestamps: true });
 
+PropertySchema.virtual('leases', {
+  ref: 'Lease',              // The model to populate from
+  localField: '_id',         // property._id
+  foreignField: 'propertyId',  // lease.property should reference property._id
+});
+
+// Define a virtual to count active leases
+PropertySchema.virtual('activeLeaseCount').get(function () {
+  if (!this.leases || !Array.isArray(this.leases)) return 0;
+  return this.leases.filter(lease => lease.status === 'active').length;
+});
+
+// Ensure virtuals are included in JSON responses
+PropertySchema.set('toJSON', { virtuals: true });
+PropertySchema.set('toObject', { virtuals: true });
+
 export default mongoose.models.Property || mongoose.model('Property', PropertySchema);

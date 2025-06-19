@@ -1,17 +1,31 @@
-// src/app/api/invoices/[id]/[action]/route.js
+// app/api/invoices/[id]/[action]/route.js - Fixed Invoice Actions API
 import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/app/api/auth/[...nextauth]/route';
 import dbConnect from 'lib/db';
+// Import models
 import Invoice from 'models/Invoice';
-import Payment from 'models/Payment';
+import User from 'models/User';
 import Property from 'models/Property';
 import Notification from 'models/Notification';
+import Payment from 'models';
 import mongoose from 'mongoose';
+
+// Helper function to get models
+function getModels() {
+  return {
+    Invoice: mongoose.model('Invoice'),
+    Payment: mongoose.model('Payment'),
+    Property: mongoose.model('Property'),
+    User: mongoose.model('User'),
+    Notification: mongoose.model('Notification')
+  };
+}
 
 // Helper function to create notification
 async function createNotification(recipientId, senderId, type, message, relatedDocument = null, relatedDocumentModel = null) {
   try {
+    const { Notification } = getModels();
     const notification = new Notification({
       recipient: recipientId,
       sender: senderId,
@@ -19,7 +33,7 @@ async function createNotification(recipientId, senderId, type, message, relatedD
       message,
       relatedDocument,
       relatedDocumentModel,
-      actionRequired: type === 'payment'
+      actionRequired: ['invoice_created', 'payment_due'].includes(type)
     });
     
     await notification.save();
@@ -30,34 +44,50 @@ async function createNotification(recipientId, senderId, type, message, relatedD
   }
 }
 
-// Helper function to check invoice ownership
+// Helper function to check invoice ownership and permissions
 async function checkInvoiceAccess(invoiceId, userId, userRole) {
+  const { Invoice, Property } = getModels();
+  
   const invoice = await Invoice.findById(invoiceId)
-    .populate('propertyId', 'landlord')
-    .populate('tenantId', 'name firstName lastName email');
+    .populate('property', 'landlord address name')
+    .populate('tenant', 'name firstName lastName email')
+    .lean();
 
   if (!invoice) {
     return { error: 'Invoice not found', status: 404 };
   }
 
   // Check access based on role
-  if (userRole === 'landlord') {
-    if (invoice.propertyId?.landlord?.toString() !== userId) {
-      return { error: 'You can only manage invoices for your own properties', status: 403 };
-    }
-  } else if (userRole === 'tenant') {
-    if (invoice.tenantId?._id?.toString() !== userId) {
+  if (userRole === 'tenant') {
+    if (invoice.tenant?._id?.toString() !== userId) {
       return { error: 'You can only view your own invoices', status: 403 };
     }
+    // Tenants have read-only access
+    return { invoice, readOnly: true };
+  } else if (userRole === 'landlord') {
+    if (invoice.property?.landlord?.toString() !== userId) {
+      return { error: 'You can only manage invoices for your own properties', status: 403 };
+    }
   }
-  // Managers have access to all invoices
+  // Managers and admins have full access to all invoices
 
   return { invoice };
 }
 
-// POST - Handle invoice actions (send, mark-paid, cancel, etc.)
+// Generate invoice number if not present
+function generateInvoiceNumber() {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const random = Math.floor(Math.random() * 9999).toString().padStart(4, '0');
+  return `INV-${year}${month}-${random}`;
+}
+
+// POST - Handle invoice actions
 export async function POST(request, { params }) {
   try {
+    await dbConnect();
+    
     const session = await getServerSession(authOptions);
     
     if (!session?.user?.id) {
@@ -67,9 +97,7 @@ export async function POST(request, { params }) {
       );
     }
 
-    await dbConnect();
-    
-    const { id, action } = params;
+    const { id, action } = await params;
     
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return NextResponse.json(
@@ -88,19 +116,35 @@ export async function POST(request, { params }) {
     }
 
     const invoice = accessCheck.invoice;
-    const tenantName = invoice.tenantId?.name || 
-      `${invoice.tenantId?.firstName || ''} ${invoice.tenantId?.lastName || ''}`.trim() || 
+    const isReadOnly = accessCheck.readOnly;
+
+    // Prevent write operations for read-only users
+    if (isReadOnly && !['view', 'download'].includes(action)) {
+      return NextResponse.json(
+        { error: 'Insufficient permissions for this action' },
+        { status: 403 }
+      );
+    }
+
+    const tenantName = invoice.tenant?.name || 
+      `${invoice.tenant?.firstName || ''} ${invoice.tenant?.lastName || ''}`.trim() || 
       'Unknown Tenant';
 
     switch (action) {
       case 'send':
         return await handleSendInvoice(invoice, session.user, tenantName);
       
+      case 'approve':
+        return await handleApproveInvoice(invoice, request, session.user, tenantName);
+      
+      case 'reject':
+        return await handleRejectInvoice(invoice, request, session.user, tenantName);
+      
       case 'mark-paid':
         return await handleMarkAsPaid(invoice, request, session.user, tenantName);
       
       case 'cancel':
-        return await handleCancelInvoice(invoice, session.user, tenantName);
+        return await handleCancelInvoice(invoice, request, session.user, tenantName);
       
       case 'remind':
         return await handleSendReminder(invoice, session.user, tenantName);
@@ -118,7 +162,7 @@ export async function POST(request, { params }) {
   } catch (error) {
     console.error(`Error performing invoice action ${params.action}:`, error);
     return NextResponse.json(
-      { error: 'Failed to perform action' },
+      { error: 'Failed to perform action', details: process.env.NODE_ENV === 'development' ? error.message : undefined },
       { status: 500 }
     );
   }
@@ -126,34 +170,50 @@ export async function POST(request, { params }) {
 
 // Handle sending invoice
 async function handleSendInvoice(invoice, currentUser, tenantName) {
-  // Check permissions - only landlords and managers can send invoices
-  if (!['landlord', 'manager'].includes(currentUser.role)) {
+  const { Invoice } = getModels();
+  
+  // Check permissions
+  if (!['landlord', 'manager', 'admin'].includes(currentUser.role)) {
     return NextResponse.json(
       { error: 'Insufficient permissions to send invoices' },
       { status: 403 }
     );
   }
 
-  if (invoice.status !== 'draft') {
+  if (!['draft', 'approved'].includes(invoice.status)) {
     return NextResponse.json(
-      { error: 'Only draft invoices can be sent' },
+      { error: 'Only draft or approved invoices can be sent' },
       { status: 400 }
     );
   }
 
   // Update invoice status
-  invoice.status = 'sent';
-  invoice.sentDate = new Date();
-  await invoice.save();
+  const updatedInvoice = await Invoice.findByIdAndUpdate(
+    invoice._id,
+    {
+      status: 'sent',
+      approvalStatus: 'approved', // Auto-approve when sending
+      sentDate: new Date(),
+      $push: {
+        approvalHistory: {
+          action: 'sent',
+          user: currentUser.id,
+          notes: `Invoice sent by ${currentUser.role}`,
+          timestamp: new Date()
+        }
+      }
+    },
+    { new: true }
+  );
 
   // Create notification for tenant
   const dueDate = new Date(invoice.dueDate).toLocaleDateString();
-  const amount = invoice.total.toLocaleString('en-ZM', { style: 'currency', currency: 'ZMW' });
+  const amount = invoice.totalAmount?.toLocaleString('en-ZM', { style: 'currency', currency: 'ZMW' });
   
   await createNotification(
-    invoice.tenantId._id,
+    invoice.tenant._id,
     currentUser.id,
-    'payment',
+    'invoice_created',
     `Invoice ${invoice.invoiceNumber} has been sent to you. Amount: ${amount}. Due date: ${dueDate}. Please make payment by the due date.`,
     invoice._id,
     'Invoice'
@@ -163,126 +223,271 @@ async function handleSendInvoice(invoice, currentUser, tenantName) {
   await createNotification(
     currentUser.id,
     null, // System notification
-    'system',
+    'general',
     `Invoice ${invoice.invoiceNumber} has been successfully sent to ${tenantName}.`,
     invoice._id,
     'Invoice'
   );
 
-  // TODO: Implement actual email sending logic here
-  console.log(`Email would be sent to ${invoice.tenantId.email} for invoice ${invoice.invoiceNumber}`);
-
   return NextResponse.json({
     message: 'Invoice sent successfully',
-    invoice: {
-      ...invoice.toObject(),
-      emailSent: true,
-      sentTo: invoice.tenantId.email
-    }
+    invoice: updatedInvoice
+  });
+}
+
+// Handle approving invoice
+async function handleApproveInvoice(invoice, request, currentUser, tenantName) {
+  const { Invoice } = getModels();
+  
+  // Check permissions
+  if (!['manager', 'admin'].includes(currentUser.role)) {
+    return NextResponse.json(
+      { error: 'Only managers and administrators can approve invoices' },
+      { status: 403 }
+    );
+  }
+
+  if (invoice.approvalStatus !== 'pending') {
+    return NextResponse.json(
+      { error: 'Only pending invoices can be approved' },
+      { status: 400 }
+    );
+  }
+
+  const body = await request.json().catch(() => ({}));
+  const notes = body.notes || 'Invoice approved';
+
+  // Update invoice
+  const updatedInvoice = await Invoice.findByIdAndUpdate(
+    invoice._id,
+    {
+      approvalStatus: 'approved',
+      approvedBy: currentUser.id,
+      approvedAt: new Date(),
+      approvalNotes: notes,
+      $push: {
+        approvalHistory: {
+          action: 'approved',
+          user: currentUser.id,
+          notes: notes,
+          timestamp: new Date()
+        }
+      }
+    },
+    { new: true }
+  );
+
+  // Create notification for tenant
+  await createNotification(
+    invoice.tenant._id,
+    currentUser.id,
+    'general',
+    `Your invoice ${invoice.invoiceNumber} has been approved and will be sent shortly.`,
+    invoice._id,
+    'Invoice'
+  );
+
+  return NextResponse.json({
+    message: 'Invoice approved successfully',
+    invoice: updatedInvoice
+  });
+}
+
+// Handle rejecting invoice
+async function handleRejectInvoice(invoice, request, currentUser, tenantName) {
+  const { Invoice } = getModels();
+  
+  // Check permissions
+  if (!['manager', 'admin'].includes(currentUser.role)) {
+    return NextResponse.json(
+      { error: 'Only managers and administrators can reject invoices' },
+      { status: 403 }
+    );
+  }
+
+  if (invoice.approvalStatus !== 'pending') {
+    return NextResponse.json(
+      { error: 'Only pending invoices can be rejected' },
+      { status: 400 }
+    );
+  }
+
+  const body = await request.json().catch(() => ({}));
+  const reason = body.reason || 'Invoice rejected';
+
+  // Update invoice
+  const updatedInvoice = await Invoice.findByIdAndUpdate(
+    invoice._id,
+    {
+      approvalStatus: 'rejected',
+      rejectionReason: reason,
+      $push: {
+        approvalHistory: {
+          action: 'rejected',
+          user: currentUser.id,
+          notes: reason,
+          timestamp: new Date()
+        }
+      }
+    },
+    { new: true }
+  );
+
+  // Create notification for invoice creator
+  await createNotification(
+    invoice.createdBy || invoice.tenant._id,
+    currentUser.id,
+    'general',
+    `Invoice ${invoice.invoiceNumber} has been rejected. Reason: ${reason}`,
+    invoice._id,
+    'Invoice'
+  );
+
+  return NextResponse.json({
+    message: 'Invoice rejected successfully',
+    invoice: updatedInvoice
   });
 }
 
 // Handle marking invoice as paid
 async function handleMarkAsPaid(invoice, request, currentUser, tenantName) {
+  const { Invoice, Payment } = getModels();
+  
   // Check permissions
-  if (!['landlord', 'manager'].includes(currentUser.role)) {
+  if (!['landlord', 'manager', 'admin'].includes(currentUser.role)) {
     return NextResponse.json(
       { error: 'Insufficient permissions to mark invoices as paid' },
       { status: 403 }
     );
   }
 
-  if (!['sent', 'overdue'].includes(invoice.status)) {
+  if (!['sent', 'viewed', 'overdue'].includes(invoice.status)) {
     return NextResponse.json(
-      { error: 'Only sent or overdue invoices can be marked as paid' },
+      { error: 'Only sent, viewed, or overdue invoices can be marked as paid' },
       { status: 400 }
     );
   }
 
   const body = await request.json().catch(() => ({}));
   
+  // Calculate outstanding amount
+  const outstandingAmount = (invoice.totalAmount || 0) - (invoice.paidAmount || 0);
+  
   // Get payment details from request body or use defaults
-  const paymentAmount = body.amount || invoice.balanceDue || invoice.total;
+  const paymentAmount = body.amount || outstandingAmount;
   const paymentDate = body.paymentDate ? new Date(body.paymentDate) : new Date();
-  const paymentMethod = body.paymentMethod || 'other';
-  const reference = body.reference || `Payment for ${invoice.invoiceNumber}`;
+  const paymentMethod = body.paymentMethod || 'cash';
+  const reference = body.reference || `Manual payment for ${invoice.invoiceNumber}`;
+
+  if (paymentAmount <= 0) {
+    return NextResponse.json(
+      { error: 'Payment amount must be greater than zero' },
+      { status: 400 }
+    );
+  }
+
+  if (paymentAmount > outstandingAmount) {
+    return NextResponse.json(
+      { error: `Payment amount cannot exceed outstanding balance of ${outstandingAmount.toLocaleString('en-ZM', { style: 'currency', currency: 'ZMW' })}` },
+      { status: 400 }
+    );
+  }
 
   // Create payment record
   const payment = new Payment({
-    leaseId: invoice.leaseId,
-    tenantId: invoice.tenantId._id,
-    propertyId: invoice.propertyId._id,
+    tenant: invoice.tenant._id,
+    property: invoice.property._id,
+    lease: invoice.lease,
     amount: paymentAmount,
     paymentDate,
     paymentMethod,
-    reference,
+    referenceNumber: reference,
     description: `Payment for invoice ${invoice.invoiceNumber}`,
-    status: 'verified', // Auto-verify manual payments
-    verifiedBy: currentUser.id,
-    verifiedAt: new Date(),
-    createdBy: currentUser.id
+    status: 'completed',
+    approvalStatus: 'approved',
+    approvedBy: currentUser.id,
+    approvedAt: new Date(),
+    recordedBy: currentUser.id,
+    receiptNumber: `PAY-${Date.now()}-${Math.floor(Math.random() * 1000)}`
+  });
+
+  // Add approval history to payment
+  payment.approvalHistory.push({
+    action: 'approved',
+    user: currentUser.id,
+    notes: `Manual payment recorded by ${currentUser.role}`,
+    timestamp: new Date()
   });
 
   await payment.save();
 
   // Update invoice
-  invoice.amountPaid = (invoice.amountPaid || 0) + paymentAmount;
-  invoice.balanceDue = invoice.total - invoice.amountPaid;
-  
-  // Add to payment history
-  invoice.paymentHistory.push({
-    paymentId: payment._id,
-    amount: paymentAmount,
-    date: paymentDate
-  });
+  const newPaidAmount = (invoice.paidAmount || 0) + paymentAmount;
+  const newOutstandingAmount = (invoice.totalAmount || 0) - newPaidAmount;
+  const isFullyPaid = newOutstandingAmount <= 0;
 
-  // Update status if fully paid
-  const wasFullyPaid = invoice.balanceDue <= 0;
-  if (wasFullyPaid) {
-    invoice.status = 'paid';
-    invoice.paidDate = paymentDate;
-  }
-
-  await invoice.save();
+  const updatedInvoice = await Invoice.findByIdAndUpdate(
+    invoice._id,
+    {
+      paidAmount: newPaidAmount,
+      status: isFullyPaid ? 'paid' : invoice.status,
+      $push: {
+        payments: {
+          payment: payment._id,
+          amount: paymentAmount,
+          date: paymentDate
+        },
+        approvalHistory: {
+          action: 'payment_recorded',
+          user: currentUser.id,
+          notes: `Payment of ${paymentAmount.toLocaleString('en-ZM', { style: 'currency', currency: 'ZMW' })} recorded`,
+          timestamp: new Date()
+        }
+      }
+    },
+    { new: true }
+  );
 
   // Create notifications
   const amount = paymentAmount.toLocaleString('en-ZM', { style: 'currency', currency: 'ZMW' });
   
   // Notify tenant
   await createNotification(
-    invoice.tenantId._id,
+    invoice.tenant._id,
     currentUser.id,
-    'payment',
-    wasFullyPaid 
+    'general',
+    isFullyPaid 
       ? `Your payment of ${amount} for invoice ${invoice.invoiceNumber} has been received and processed. Invoice is now fully paid.`
-      : `Your payment of ${amount} for invoice ${invoice.invoiceNumber} has been received. Remaining balance: ${invoice.balanceDue.toLocaleString('en-ZM', { style: 'currency', currency: 'ZMW' })}.`,
+      : `Your payment of ${amount} for invoice ${invoice.invoiceNumber} has been received. Remaining balance: ${newOutstandingAmount.toLocaleString('en-ZM', { style: 'currency', currency: 'ZMW' })}.`,
     payment._id,
     'Payment'
   );
 
-  // Notify landlord/manager
+  // Notify current user
   await createNotification(
     currentUser.id,
-    null, // System notification
-    'system',
-    `Payment of ${amount} recorded for invoice ${invoice.invoiceNumber} from ${tenantName}. ${wasFullyPaid ? 'Invoice is now fully paid.' : 'Partial payment recorded.'}`,
+    null,
+    'general',
+    `Payment of ${amount} recorded for invoice ${invoice.invoiceNumber} from ${tenantName}. ${isFullyPaid ? 'Invoice is now fully paid.' : 'Partial payment recorded.'}`,
     payment._id,
     'Payment'
   );
 
   return NextResponse.json({
-    message: wasFullyPaid ? 'Invoice marked as fully paid' : 'Partial payment recorded successfully',
-    invoice: invoice.toObject(),
+    message: isFullyPaid ? 'Invoice marked as fully paid' : 'Partial payment recorded successfully',
+    invoice: updatedInvoice,
     payment: payment.toObject()
   });
 }
 
 // Handle cancelling invoice
-async function handleCancelInvoice(invoice, currentUser, tenantName) {
+async function handleCancelInvoice(invoice, request, currentUser, tenantName) {
+  const { Invoice } = getModels();
+  
   // Check permissions
-  if (!['landlord', 'manager'].includes(currentUser.role)) {
+  if (!['manager', 'admin'].includes(currentUser.role)) {
     return NextResponse.json(
-      { error: 'Insufficient permissions to cancel invoices' },
+      { error: 'Only managers and administrators can cancel invoices' },
       { status: 403 }
     );
   }
@@ -294,20 +499,38 @@ async function handleCancelInvoice(invoice, currentUser, tenantName) {
     );
   }
 
+  const body = await request.json().catch(() => ({}));
+  const reason = body.reason || 'Invoice cancelled';
+
   const oldStatus = invoice.status;
-  invoice.status = 'cancelled';
-  invoice.cancelledDate = new Date();
-  invoice.cancelledBy = currentUser.id;
-  await invoice.save();
+  
+  // Update invoice
+  const updatedInvoice = await Invoice.findByIdAndUpdate(
+    invoice._id,
+    {
+      status: 'cancelled',
+      approvalStatus: 'rejected',
+      rejectionReason: reason,
+      $push: {
+        approvalHistory: {
+          action: 'cancelled',
+          user: currentUser.id,
+          notes: reason,
+          timestamp: new Date()
+        }
+      }
+    },
+    { new: true }
+  );
 
   // Create notifications only if invoice was previously sent
-  if (['sent', 'overdue'].includes(oldStatus)) {
+  if (['sent', 'viewed', 'overdue'].includes(oldStatus)) {
     // Notify tenant
     await createNotification(
-      invoice.tenantId._id,
+      invoice.tenant._id,
       currentUser.id,
-      'system',
-      `Invoice ${invoice.invoiceNumber} has been cancelled. No payment is required.`,
+      'general',
+      `Invoice ${invoice.invoiceNumber} has been cancelled. No payment is required. Reason: ${reason}`,
       invoice._id,
       'Invoice'
     );
@@ -316,8 +539,8 @@ async function handleCancelInvoice(invoice, currentUser, tenantName) {
   // Notify current user
   await createNotification(
     currentUser.id,
-    null, // System notification
-    'system',
+    null,
+    'general',
     `Invoice ${invoice.invoiceNumber} for ${tenantName} has been cancelled successfully.`,
     invoice._id,
     'Invoice'
@@ -325,35 +548,52 @@ async function handleCancelInvoice(invoice, currentUser, tenantName) {
 
   return NextResponse.json({
     message: 'Invoice cancelled successfully',
-    invoice: invoice.toObject()
+    invoice: updatedInvoice
   });
 }
 
 // Handle sending reminder
 async function handleSendReminder(invoice, currentUser, tenantName) {
+  const { Invoice } = getModels();
+  
   // Check permissions
-  if (!['landlord', 'manager'].includes(currentUser.role)) {
+  if (!['landlord', 'manager', 'admin'].includes(currentUser.role)) {
     return NextResponse.json(
       { error: 'Insufficient permissions to send reminders' },
       { status: 403 }
     );
   }
 
-  if (!['sent', 'overdue'].includes(invoice.status)) {
+  if (!['sent', 'viewed', 'overdue'].includes(invoice.status)) {
     return NextResponse.json(
-      { error: 'Reminders can only be sent for sent or overdue invoices' },
+      { error: 'Reminders can only be sent for sent, viewed, or overdue invoices' },
       { status: 400 }
     );
   }
 
   // Update reminder count
-  invoice.remindersSent = (invoice.remindersSent || 0) + 1;
-  invoice.lastReminderDate = new Date();
-  await invoice.save();
+  const reminderCount = (invoice.remindersSent || 0) + 1;
+  
+  await Invoice.findByIdAndUpdate(
+    invoice._id,
+    {
+      remindersSent: reminderCount,
+      lastReminderDate: new Date(),
+      $push: {
+        approvalHistory: {
+          action: 'reminder_sent',
+          user: currentUser.id,
+          notes: `Reminder #${reminderCount} sent`,
+          timestamp: new Date()
+        }
+      }
+    }
+  );
 
   // Create notification for tenant
   const dueDate = new Date(invoice.dueDate).toLocaleDateString();
-  const amount = invoice.balanceDue.toLocaleString('en-ZM', { style: 'currency', currency: 'ZMW' });
+  const outstandingAmount = (invoice.totalAmount || 0) - (invoice.paidAmount || 0);
+  const amount = outstandingAmount.toLocaleString('en-ZM', { style: 'currency', currency: 'ZMW' });
   const daysOverdue = invoice.status === 'overdue' 
     ? Math.ceil((new Date() - new Date(invoice.dueDate)) / (1000 * 60 * 60 * 24))
     : 0;
@@ -366,9 +606,9 @@ async function handleSendReminder(invoice, currentUser, tenantName) {
   }
 
   await createNotification(
-    invoice.tenantId._id,
+    invoice.tenant._id,
     currentUser.id,
-    'payment',
+    'payment_due',
     reminderMessage,
     invoice._id,
     'Invoice'
@@ -377,24 +617,25 @@ async function handleSendReminder(invoice, currentUser, tenantName) {
   // Create confirmation for sender
   await createNotification(
     currentUser.id,
-    null, // System notification
-    'system',
-    `Payment reminder sent to ${tenantName} for invoice ${invoice.invoiceNumber}. This is reminder #${invoice.remindersSent}.`,
+    null,
+    'general',
+    `Payment reminder sent to ${tenantName} for invoice ${invoice.invoiceNumber}. This is reminder #${reminderCount}.`,
     invoice._id,
     'Invoice'
   );
 
   return NextResponse.json({
     message: 'Reminder sent successfully',
-    invoice: invoice.toObject(),
-    reminderCount: invoice.remindersSent
+    reminderCount
   });
 }
 
 // Handle duplicating invoice
 async function handleDuplicateInvoice(invoice, currentUser) {
+  const { Invoice } = getModels();
+  
   // Check permissions
-  if (!['landlord', 'manager'].includes(currentUser.role)) {
+  if (!['landlord', 'manager', 'admin'].includes(currentUser.role)) {
     return NextResponse.json(
       { error: 'Insufficient permissions to duplicate invoices' },
       { status: 403 }
@@ -403,24 +644,32 @@ async function handleDuplicateInvoice(invoice, currentUser) {
 
   // Create new invoice based on current one
   const newInvoiceData = {
-    tenantId: invoice.tenantId._id,
-    propertyId: invoice.propertyId._id,
-    leaseId: invoice.leaseId,
+    tenant: invoice.tenant._id,
+    property: invoice.property._id,
+    lease: invoice.lease,
     issueDate: new Date(),
     dueDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days from now
     status: 'draft',
-    items: invoice.items.map(item => ({
+    approvalStatus: 'pending',
+    items: invoice.items?.map(item => ({
       description: item.description,
-      amount: item.amount,
-      taxRate: item.taxRate,
-      periodStart: item.periodStart,
-      periodEnd: item.periodEnd
-    })),
-    subtotal: invoice.subtotal,
-    tax: invoice.tax,
-    total: invoice.total,
-    balanceDue: invoice.total,
-    notes: invoice.notes
+      quantity: item.quantity || 1,
+      unitPrice: item.unitPrice,
+      amount: item.amount
+    })) || [],
+    subtotal: invoice.subtotal || 0,
+    taxAmount: invoice.taxAmount || 0,
+    totalAmount: invoice.totalAmount || 0,
+    paidAmount: 0,
+    notes: invoice.notes,
+    paymentTerms: invoice.paymentTerms,
+    createdBy: currentUser.id,
+    approvalHistory: [{
+      action: 'submitted',
+      user: currentUser.id,
+      notes: `Duplicated from invoice ${invoice.invoiceNumber}`,
+      timestamp: new Date()
+    }]
   };
 
   const newInvoice = new Invoice(newInvoiceData);
@@ -428,15 +677,15 @@ async function handleDuplicateInvoice(invoice, currentUser) {
 
   // Populate the new invoice
   await newInvoice.populate([
-    { path: 'tenantId', select: 'name firstName lastName email' },
-    { path: 'propertyId', select: 'address name' }
+    { path: 'tenant', select: 'name firstName lastName email' },
+    { path: 'property', select: 'address name' }
   ]);
 
   // Create notification for current user
   await createNotification(
     currentUser.id,
-    null, // System notification
-    'system',
+    null,
+    'general',
     `Invoice ${invoice.invoiceNumber} has been duplicated as ${newInvoice.invoiceNumber}.`,
     newInvoice._id,
     'Invoice'
@@ -444,7 +693,7 @@ async function handleDuplicateInvoice(invoice, currentUser) {
 
   return NextResponse.json({
     message: 'Invoice duplicated successfully',
-    originalInvoice: invoice.toObject(),
+    originalInvoice: invoice,
     newInvoice: newInvoice.toObject()
   });
 }

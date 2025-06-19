@@ -1,7 +1,7 @@
 // app/api/invoices/[id]/pdf/route.js
 import Invoice from 'models/Invoice';
-import { generatePDF } from '@/lib/pdfGenerator';
-import dbConnect from '@/lib/db';
+import { generatePDF } from 'lib/pdfGenerator';
+import dbConnect from 'lib/db';
 
 export async function GET(req, { params }) {
   await dbConnect();

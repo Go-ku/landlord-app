@@ -96,6 +96,7 @@ async function fetchDashboardStats(userId, userRole) {
     });
 
     stats.overdueRentals = overdueLeases.length;
+    console.log(overdueLeases)
     stats.overdueAmount = overdueLeases.reduce((sum, lease) => sum + (lease.balanceDue || 0), 0);
 
     return stats;
