@@ -27,9 +27,12 @@ export default function EditPaymentClient({ payment }) {
     amount: payment.amount?.toString() || '',
     paymentDate: payment.paymentDate ? formatDate(payment.paymentDate, 'input') : '',
     paymentMethod: payment.paymentMethod || 'bank_transfer',
-    reference: payment.reference || '',
+    referenceNumber: payment.referenceNumber || '',
     description: payment.description || '',
+    notes: payment.notes || '',
     status: payment.status || 'pending',
+    approvalStatus: payment.approvalStatus || 'pending',
+    paymentType: payment.paymentType || 'rent',
     receiptFile: null
   });
   
@@ -52,9 +55,12 @@ export default function EditPaymentClient({ payment }) {
       amount: payment.amount?.toString() || '',
       paymentDate: formatDateForInput(payment.paymentDate),
       paymentMethod: payment.paymentMethod || 'bank_transfer',
-      reference: payment.reference || '',
+      referenceNumber: payment.referenceNumber || '',
       description: payment.description || '',
+      notes: payment.notes || '',
       status: payment.status || 'pending',
+      approvalStatus: payment.approvalStatus || 'pending',
+      paymentType: payment.paymentType || 'rent',
       receiptFile: null
     });
   }, [payment]);
@@ -99,8 +105,8 @@ export default function EditPaymentClient({ payment }) {
     if (!formData.paymentMethod) {
       newErrors.paymentMethod = 'Payment method is required';
     }
-    if (!formData.reference.trim()) {
-      newErrors.reference = 'Payment reference is required';
+    if (!formData.referenceNumber.trim()) {
+      newErrors.referenceNumber = 'Payment reference is required';
     }
     
     // Validate payment date is not in the future
@@ -130,9 +136,12 @@ export default function EditPaymentClient({ payment }) {
       submitData.append('amount', parseFloat(formData.amount));
       submitData.append('paymentDate', formData.paymentDate);
       submitData.append('paymentMethod', formData.paymentMethod);
-      submitData.append('reference', formData.reference);
+      submitData.append('referenceNumber', formData.referenceNumber);
       submitData.append('description', formData.description);
+      submitData.append('notes', formData.notes);
       submitData.append('status', formData.status);
+      submitData.append('approvalStatus', formData.approvalStatus);
+      submitData.append('paymentType', formData.paymentType);
       submitData.append('removeExistingReceipt', removeExistingReceipt);
       
       // Add file if provided
@@ -196,23 +205,39 @@ export default function EditPaymentClient({ payment }) {
     { value: 'cash', label: 'Cash' },
     { value: 'cheque', label: 'Cheque' },
     { value: 'card', label: 'Card Payment' },
+    { value: 'manual', label: 'Manual Entry' }
+  ];
+
+  const paymentTypes = [
+    { value: 'rent', label: 'Rent Payment' },
+    { value: 'deposit', label: 'Security Deposit' },
+    { value: 'utilities', label: 'Utilities' },
+    { value: 'maintenance', label: 'Maintenance Fee' },
+    { value: 'fees', label: 'Other Fees' },
     { value: 'other', label: 'Other' }
   ];
 
   const statusOptions = [
-    { value: 'pending', label: 'Pending Verification', icon: <Clock className="w-4 h-4" />, color: 'text-yellow-600' },
-    { value: 'verified', label: 'Verified/Approved', icon: <CheckCircle className="w-4 h-4" />, color: 'text-green-600' },
-    { value: 'disputed', label: 'Disputed', icon: <AlertTriangle className="w-4 h-4" />, color: 'text-red-600' },
+    { value: 'pending', label: 'Pending', icon: <Clock className="w-4 h-4" />, color: 'text-yellow-600' },
+    { value: 'completed', label: 'Completed', icon: <CheckCircle className="w-4 h-4" />, color: 'text-green-600' },
+    { value: 'verified', label: 'Verified', icon: <CheckCircle className="w-4 h-4" />, color: 'text-green-600' },
+    { value: 'failed', label: 'Failed', icon: <XCircle className="w-4 h-4" />, color: 'text-red-600' },
     { value: 'cancelled', label: 'Cancelled', icon: <XCircle className="w-4 h-4" />, color: 'text-gray-600' }
   ];
 
-  const propertyName = payment.propertyId?.address || payment.propertyId?.name || 'Unknown Property';
-  const tenantName = payment.tenantId?.name || 
-    `${payment.tenantId?.firstName} ${payment.tenantId?.lastName}` || 
+  const approvalStatusOptions = [
+    { value: 'pending', label: 'Pending Approval', icon: <Clock className="w-4 h-4" />, color: 'text-yellow-600' },
+    { value: 'approved', label: 'Approved', icon: <CheckCircle className="w-4 h-4" />, color: 'text-green-600' },
+    { value: 'rejected', label: 'Rejected', icon: <XCircle className="w-4 h-4" />, color: 'text-red-600' }
+  ];
+
+  const propertyName = payment.property?.address || payment.property?.name || 'Unknown Property';
+  const tenantName = payment.tenant?.name || 
+    `${payment.tenant?.firstName} ${payment.tenant?.lastName}` || 
     'Unknown Tenant';
 
   const canEdit = payment.status !== 'cancelled';
-  const isVerified = payment.status === 'verified';
+  const isVerified = payment.status === 'verified' || payment.approvalStatus === 'approved';
 
   return (
     <div className="min-h-screen bg-gray-50 py-8 px-4">
@@ -233,7 +258,7 @@ export default function EditPaymentClient({ payment }) {
               Edit Payment
             </h1>
             <p className="text-gray-600">
-              Reference: <span className="font-mono font-medium">{payment.reference}</span>
+              Receipt: <span className="font-mono font-medium">{payment.receiptNumber}</span>
             </p>
             <p className="text-gray-600">
               {propertyName} - {tenantName}
@@ -252,7 +277,7 @@ export default function EditPaymentClient({ payment }) {
               <div className="mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded-md">
                 <p className="text-sm text-yellow-800 flex items-center">
                   <AlertTriangle className="w-4 h-4 mr-2 text-yellow-600" />
-                  This payment has been verified. Changes may affect the lease balance.
+                  This payment has been verified/approved. Changes may affect the lease balance.
                 </p>
               </div>
             )}
@@ -334,37 +359,75 @@ export default function EditPaymentClient({ payment }) {
                     
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">
-                        Payment Reference *
+                        Payment Type *
                       </label>
-                      <input
-                        type="text"
-                        name="reference"
-                        value={formData.reference}
+                      <select
+                        name="paymentType"
+                        value={formData.paymentType}
                         onChange={handleInputChange}
                         disabled={!canEdit}
                         className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 ${
-                          errors.reference ? 'border-red-500' : 'border-gray-300'
+                          !canEdit ? 'bg-gray-100 cursor-not-allowed' : ''
+                        }`}
+                      >
+                        {paymentTypes.map(type => (
+                          <option key={type.value} value={type.value}>
+                            {type.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    
+                    <div className="md:col-span-2">
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Reference Number *
+                      </label>
+                      <input
+                        type="text"
+                        name="referenceNumber"
+                        value={formData.referenceNumber}
+                        onChange={handleInputChange}
+                        disabled={!canEdit}
+                        className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                          errors.referenceNumber ? 'border-red-500' : 'border-gray-300'
                         } ${!canEdit ? 'bg-gray-100 cursor-not-allowed' : ''}`}
                         placeholder="Transaction ID, cheque number, etc."
                       />
-                      {errors.reference && <p className="text-red-500 text-sm mt-1">{errors.reference}</p>}
+                      {errors.referenceNumber && <p className="text-red-500 text-sm mt-1">{errors.referenceNumber}</p>}
                     </div>
                   </div>
                   
                   <div className="mt-4">
                     <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Description / Notes
+                      Description
                     </label>
                     <textarea
                       name="description"
                       value={formData.description}
                       onChange={handleInputChange}
-                      rows={3}
+                      rows={2}
                       disabled={!canEdit}
                       className={`w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 ${
                         !canEdit ? 'bg-gray-100 cursor-not-allowed' : ''
                       }`}
-                      placeholder="Additional notes about this payment..."
+                      placeholder="Payment description..."
+                    />
+                  </div>
+                  
+                  <div className="mt-4">
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Notes
+                    </label>
+                    <textarea
+                      name="notes"
+                      value={formData.notes}
+                      onChange={handleInputChange}
+                      rows={2}
+                      disabled={!canEdit}
+                      className={`w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                        !canEdit ? 'bg-gray-100 cursor-not-allowed' : ''
+                      }`}
+                      placeholder="Additional notes..."
                     />
                   </div>
                 </div>
@@ -373,25 +436,58 @@ export default function EditPaymentClient({ payment }) {
                 <div>
                   <h3 className="text-lg font-semibold text-gray-900 mb-4">Payment Status</h3>
                   
-                  <div className="space-y-3">
-                    {statusOptions.map(status => (
-                      <div key={status.value} className="flex items-center space-x-3">
-                        <input
-                          type="radio"
-                          id={status.value}
-                          name="status"
-                          value={status.value}
-                          checked={formData.status === status.value}
-                          onChange={handleInputChange}
-                          disabled={!canEdit}
-                          className="text-blue-600"
-                        />
-                        <label htmlFor={status.value} className={`flex items-center text-sm ${status.color} ${!canEdit ? 'opacity-50' : ''}`}>
-                          {status.icon}
-                          <span className="ml-2">{status.label}</span>
-                        </label>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-3">
+                        Payment Status
+                      </label>
+                      <div className="space-y-3">
+                        {statusOptions.map(status => (
+                          <div key={status.value} className="flex items-center space-x-3">
+                            <input
+                              type="radio"
+                              id={`status_${status.value}`}
+                              name="status"
+                              value={status.value}
+                              checked={formData.status === status.value}
+                              onChange={handleInputChange}
+                              disabled={!canEdit}
+                              className="text-blue-600"
+                            />
+                            <label htmlFor={`status_${status.value}`} className={`flex items-center text-sm ${status.color} ${!canEdit ? 'opacity-50' : ''}`}>
+                              {status.icon}
+                              <span className="ml-2">{status.label}</span>
+                            </label>
+                          </div>
+                        ))}
                       </div>
-                    ))}
+                    </div>
+                    
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-3">
+                        Approval Status
+                      </label>
+                      <div className="space-y-3">
+                        {approvalStatusOptions.map(status => (
+                          <div key={status.value} className="flex items-center space-x-3">
+                            <input
+                              type="radio"
+                              id={`approval_${status.value}`}
+                              name="approvalStatus"
+                              value={status.value}
+                              checked={formData.approvalStatus === status.value}
+                              onChange={handleInputChange}
+                              disabled={!canEdit}
+                              className="text-blue-600"
+                            />
+                            <label htmlFor={`approval_${status.value}`} className={`flex items-center text-sm ${status.color} ${!canEdit ? 'opacity-50' : ''}`}>
+                              {status.icon}
+                              <span className="ml-2">{status.label}</span>
+                            </label>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
                   </div>
                 </div>
 
@@ -563,8 +659,18 @@ export default function EditPaymentClient({ payment }) {
                 </div>
                 
                 <div className="flex justify-between">
+                  <span className="text-gray-600">Type:</span>
+                  <span className="font-medium">{paymentTypes.find(t => t.value === payment.paymentType)?.label}</span>
+                </div>
+                
+                <div className="flex justify-between">
                   <span className="text-gray-600">Status:</span>
                   <span className="font-medium capitalize">{payment.status}</span>
+                </div>
+                
+                <div className="flex justify-between">
+                  <span className="text-gray-600">Approval:</span>
+                  <span className="font-medium capitalize">{payment.approvalStatus}</span>
                 </div>
                 
                 <div className="flex justify-between">
@@ -581,7 +687,7 @@ export default function EditPaymentClient({ payment }) {
               <div className="space-y-3 text-sm text-gray-700">
                 <div className="flex items-start">
                   <AlertTriangle className="w-4 h-4 text-yellow-500 mr-2 mt-0.5 flex-shrink-0" />
-                  <p>Changing verified payments may affect lease balance calculations.</p>
+                  <p>Changing approved payments may affect lease balance calculations.</p>
                 </div>
                 
                 <div className="flex items-start">

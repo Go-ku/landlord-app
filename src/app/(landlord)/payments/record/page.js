@@ -14,7 +14,9 @@ import {
   AlertCircle,
   CheckCircle,
   Upload,
-  X
+  X,
+  Clock,
+  XCircle
 } from 'lucide-react';
 import { getCurrentDate, formatDate } from 'utils/date';
 import { formatCurrency } from 'utils/currency';
@@ -31,10 +33,13 @@ export default function RecordPaymentPage() {
     amount: '',
     paymentDate: getCurrentDate(),
     paymentMethod: 'bank_transfer',
-    reference: '',
+    paymentType: 'rent',
+    referenceNumber: '',
     description: '',
+    notes: '',
     receiptFile: null,
-    status: 'pending'
+    status: 'pending',
+    approvalStatus: 'pending'
   });
   
   const [leases, setLeases] = useState([]);
@@ -127,7 +132,8 @@ export default function RecordPaymentPage() {
     if (!formData.amount || parseFloat(formData.amount) <= 0) newErrors.amount = 'Valid payment amount is required';
     if (!formData.paymentDate) newErrors.paymentDate = 'Payment date is required';
     if (!formData.paymentMethod) newErrors.paymentMethod = 'Payment method is required';
-    if (!formData.reference.trim()) newErrors.reference = 'Payment reference is required';
+    if (!formData.paymentType) newErrors.paymentType = 'Payment type is required';
+    if (!formData.referenceNumber.trim()) newErrors.referenceNumber = 'Payment reference is required';
     
     // Validate payment date is not in the future
     const paymentDate = new Date(formData.paymentDate);
@@ -151,14 +157,17 @@ export default function RecordPaymentPage() {
       // Create FormData for file upload
       const submitData = new FormData();
       
-      // Add form fields
-      submitData.append('leaseId', formData.leaseId);
+      // Add form fields using the correct field names from the Payment model
+      submitData.append('lease', formData.leaseId); // Model uses 'lease' not 'leaseId'
       submitData.append('amount', parseFloat(formData.amount));
       submitData.append('paymentDate', formData.paymentDate);
       submitData.append('paymentMethod', formData.paymentMethod);
-      submitData.append('reference', formData.reference);
+      submitData.append('paymentType', formData.paymentType);
+      submitData.append('referenceNumber', formData.referenceNumber);
       submitData.append('description', formData.description);
+      submitData.append('notes', formData.notes);
       submitData.append('status', formData.status);
+      submitData.append('approvalStatus', formData.approvalStatus);
       
       // Add file if provided
       if (formData.receiptFile) {
@@ -192,7 +201,27 @@ export default function RecordPaymentPage() {
     { value: 'cash', label: 'Cash' },
     { value: 'cheque', label: 'Cheque' },
     { value: 'card', label: 'Card Payment' },
+    { value: 'manual', label: 'Manual Entry' }
+  ];
+
+  const paymentTypes = [
+    { value: 'rent', label: 'Rent Payment' },
+    { value: 'deposit', label: 'Security Deposit' },
+    { value: 'utilities', label: 'Utilities' },
+    { value: 'maintenance', label: 'Maintenance Fee' },
+    { value: 'fees', label: 'Other Fees' },
     { value: 'other', label: 'Other' }
+  ];
+
+  const statusOptions = [
+    { value: 'pending', label: 'Pending', icon: <Clock className="w-4 h-4" />, color: 'text-yellow-600' },
+    { value: 'completed', label: 'Completed', icon: <CheckCircle className="w-4 h-4" />, color: 'text-green-600' },
+    { value: 'verified', label: 'Verified', icon: <CheckCircle className="w-4 h-4" />, color: 'text-green-600' }
+  ];
+
+  const approvalStatusOptions = [
+    { value: 'pending', label: 'Pending Approval', icon: <Clock className="w-4 h-4" />, color: 'text-yellow-600' },
+    { value: 'approved', label: 'Pre-approved', icon: <CheckCircle className="w-4 h-4" />, color: 'text-green-600' }
   ];
 
   if (dataLoading) {
@@ -358,33 +387,68 @@ export default function RecordPaymentPage() {
                     
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">
-                        Payment Reference *
+                        Payment Type *
+                      </label>
+                      <select
+                        name="paymentType"
+                        value={formData.paymentType}
+                        onChange={handleInputChange}
+                        className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                          errors.paymentType ? 'border-red-500' : 'border-gray-300'
+                        }`}
+                      >
+                        {paymentTypes.map(type => (
+                          <option key={type.value} value={type.value}>
+                            {type.label}
+                          </option>
+                        ))}
+                      </select>
+                      {errors.paymentType && <p className="text-red-500 text-sm mt-1">{errors.paymentType}</p>}
+                    </div>
+                    
+                    <div className="md:col-span-2">
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Reference Number *
                       </label>
                       <input
                         type="text"
-                        name="reference"
-                        value={formData.reference}
+                        name="referenceNumber"
+                        value={formData.referenceNumber}
                         onChange={handleInputChange}
                         className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 ${
-                          errors.reference ? 'border-red-500' : 'border-gray-300'
+                          errors.referenceNumber ? 'border-red-500' : 'border-gray-300'
                         }`}
                         placeholder="Transaction ID, cheque number, etc."
                       />
-                      {errors.reference && <p className="text-red-500 text-sm mt-1">{errors.reference}</p>}
+                      {errors.referenceNumber && <p className="text-red-500 text-sm mt-1">{errors.referenceNumber}</p>}
                     </div>
                   </div>
                   
                   <div className="mt-4">
                     <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Description / Notes
+                      Description
                     </label>
                     <textarea
                       name="description"
                       value={formData.description}
                       onChange={handleInputChange}
-                      rows={3}
+                      rows={2}
                       className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      placeholder="Additional notes about this payment..."
+                      placeholder="Payment description..."
+                    />
+                  </div>
+                  
+                  <div className="mt-4">
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Notes
+                    </label>
+                    <textarea
+                      name="notes"
+                      value={formData.notes}
+                      onChange={handleInputChange}
+                      rows={2}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      placeholder="Additional notes..."
                     />
                   </div>
                 </div>
@@ -472,41 +536,61 @@ export default function RecordPaymentPage() {
                 Payment Status
               </h3>
               
-              <div className="space-y-3">
-                <div className="flex items-center space-x-2">
-                  <input
-                    type="radio"
-                    id="pending"
-                    name="status"
-                    value="pending"
-                    checked={formData.status === 'pending'}
-                    onChange={handleInputChange}
-                    className="text-blue-600"
-                  />
-                  <label htmlFor="pending" className="text-sm text-gray-700">
-                    Pending Verification
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Payment Status
                   </label>
+                  <div className="space-y-2">
+                    {statusOptions.map(status => (
+                      <div key={status.value} className="flex items-center space-x-2">
+                        <input
+                          type="radio"
+                          id={`status_${status.value}`}
+                          name="status"
+                          value={status.value}
+                          checked={formData.status === status.value}
+                          onChange={handleInputChange}
+                          className="text-blue-600"
+                        />
+                        <label htmlFor={`status_${status.value}`} className={`flex items-center text-sm ${status.color}`}>
+                          {status.icon}
+                          <span className="ml-2">{status.label}</span>
+                        </label>
+                      </div>
+                    ))}
+                  </div>
                 </div>
                 
-                <div className="flex items-center space-x-2">
-                  <input
-                    type="radio"
-                    id="verified"
-                    name="status"
-                    value="verified"
-                    checked={formData.status === 'verified'}
-                    onChange={handleInputChange}
-                    className="text-blue-600"
-                  />
-                  <label htmlFor="verified" className="text-sm text-gray-700">
-                    Verified/Approved
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Approval Status
                   </label>
+                  <div className="space-y-2">
+                    {approvalStatusOptions.map(status => (
+                      <div key={status.value} className="flex items-center space-x-2">
+                        <input
+                          type="radio"
+                          id={`approval_${status.value}`}
+                          name="approvalStatus"
+                          value={status.value}
+                          checked={formData.approvalStatus === status.value}
+                          onChange={handleInputChange}
+                          className="text-blue-600"
+                        />
+                        <label htmlFor={`approval_${status.value}`} className={`flex items-center text-sm ${status.color}`}>
+                          {status.icon}
+                          <span className="ml-2">{status.label}</span>
+                        </label>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               </div>
               
               <div className="mt-4 p-3 bg-yellow-50 rounded-md">
                 <p className="text-sm text-yellow-800">
-                  <strong>Note:</strong> Payments marked as Pending will require manual verification before being applied to the lease balance.
+                  <strong>Note:</strong> Payments with pending approval will require manual verification before being applied to the lease balance.
                 </p>
               </div>
             </div>
@@ -539,6 +623,33 @@ export default function RecordPaymentPage() {
                     </div>
                   </>
                 )}
+              </div>
+            </div>
+
+            {/* Payment Guidelines */}
+            <div className="bg-white rounded-lg shadow p-6">
+              <h3 className="text-lg font-semibold text-gray-900 mb-4">Payment Guidelines</h3>
+              
+              <div className="space-y-3 text-sm text-gray-700">
+                <div className="flex items-start">
+                  <Calendar className="w-4 h-4 text-blue-500 mr-2 mt-0.5 flex-shrink-0" />
+                  <p>Payment date cannot be set to a future date.</p>
+                </div>
+                
+                <div className="flex items-start">
+                  <Receipt className="w-4 h-4 text-purple-500 mr-2 mt-0.5 flex-shrink-0" />
+                  <p>Always include a clear reference number for tracking.</p>
+                </div>
+                
+                <div className="flex items-start">
+                  <CheckCircle className="w-4 h-4 text-green-500 mr-2 mt-0.5 flex-shrink-0" />
+                  <p>Upload receipt when available for better record keeping.</p>
+                </div>
+                
+                <div className="flex items-start">
+                  <AlertCircle className="w-4 h-4 text-yellow-500 mr-2 mt-0.5 flex-shrink-0" />
+                  <p>Verify payment details before submitting.</p>
+                </div>
               </div>
             </div>
           </div>
