@@ -1,124 +1,177 @@
-// app/api/payments/route.js - Updated for Next.js 15 compatibility
+// app/api/payments/route.js - Enhanced with better error handling and validation
 import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '../auth/[...nextauth]/route';
 import dbConnect from 'lib/db';
 import mongoose from 'mongoose';
-import Payment from 'models';
-import User from 'models';
-import Lease from 'models';
-import Property from 'models';
+import Payment from 'models/Payment';
+import User from 'models/User';
+import Lease from 'models/Lease';
+import Property from 'models/Property';
+import Notification from 'models/Notification';
+import { rateLimit } from 'lib/utils/rate-limit';
 
-// Helper function to get models
+// Rate limiting configuration
+const limiter = rateLimit({
+  interval: 60 * 1000, // 1 minute
+  uniqueTokenPerInterval: 500, // Allow up to 500 unique users per minute
+});
+
+// Helper function to get models safely
 function getModels() {
-  return {
-    Payment: mongoose.model('Payment'),
-    User: mongoose.model('User'),
-    Property: mongoose.model('Property'),
-    Lease: mongoose.model('Lease')
-  };
+  try {
+    return {
+      Payment: mongoose.model('Payment'),
+      User: mongoose.model('User'),
+      Property: mongoose.model('Property'),
+      Lease: mongoose.model('Lease'),
+      Notification: mongoose.model('Notification')
+    };
+  } catch (error) {
+    console.error('Error getting models:', error);
+    throw new Error('Database models not available');
+  }
 }
 
-// GET - Fetch payments with role-based filtering
+// Helper function for role-based filtering
+async function buildPaymentFilter(session) {
+  const { Property } = getModels();
+  let filter = {};
+  
+  switch (session.user.role) {
+    case 'tenant':
+      filter.tenant = session.user.id;
+      break;
+      
+    case 'landlord':
+      const landlordProperties = await Property.find({ 
+        landlord: session.user.id 
+      }).select('_id').lean();
+      const propertyIds = landlordProperties.map(p => p._id);
+      filter.property = { $in: propertyIds };
+      break;
+      
+    case 'admin':
+    case 'manager':
+      // Can see all payments - no additional filter
+      break;
+      
+    default:
+      throw new Error('Insufficient permissions');
+  }
+  
+  return filter;
+}
+
+// GET - Fetch payments with enhanced filtering and security
 export async function GET(request) {
   try {
+    // Rate limiting
+    await limiter.check(request, 10, 'CACHE_TOKEN'); // 10 requests per minute per IP
+    
     await dbConnect();
     
     const session = await getServerSession(authOptions);
     
     if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized - No valid session' }, { status: 401 });
+      return NextResponse.json({ 
+        error: 'Authentication required',
+        code: 'AUTH_REQUIRED'
+      }, { status: 401 });
     }
 
-    const { Payment, Property } = getModels();
+    const { Payment } = getModels();
     const { searchParams } = new URL(request.url);
     
+    // Parse and validate query parameters
     const status = searchParams.get('status');
     const sortBy = searchParams.get('sortBy') || 'newest';
-    const page = parseInt(searchParams.get('page')) || 1;
-    const limit = parseInt(searchParams.get('limit')) || 20;
+    const page = Math.max(1, parseInt(searchParams.get('page')) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(searchParams.get('limit')) || 20)); // Max 100 items
+    const dateFrom = searchParams.get('dateFrom');
+    const dateTo = searchParams.get('dateTo');
+    const minAmount = searchParams.get('minAmount');
+    const maxAmount = searchParams.get('maxAmount');
 
-    // Role-based filtering
-    let filter = {};
-    
-    if (session.user.role === 'tenant') {
-      // Tenants can only see their own payments
-      filter.tenant = session.user.id;
-    } else if (session.user.role === 'landlord') {
-      // Landlords can see payments for their properties
-      const landlordProperties = await Property.find({ landlord: session.user.id }).select('_id');
-      const propertyIds = landlordProperties.map(p => p._id);
-      filter.property = { $in: propertyIds };
-    } else if (!['manager', 'admin'].includes(session.user.role)) {
-      // Other roles have no access
-      return NextResponse.json({ error: 'Forbidden - Insufficient permissions' }, { status: 403 });
-    }
-    // Managers and admins can see all payments (no additional filter)
+    // Build role-based filter
+    let filter = await buildPaymentFilter(session);
 
-    // Add status filter
+    // Add additional filters
     if (status && status !== 'all') {
       if (status === 'overdue') {
         filter.dueDate = { $lt: new Date() };
-        filter.status = { $nin: ['completed', 'paid', 'verified'] };
+        filter.status = { $nin: ['completed', 'verified'] };
       } else {
         filter.status = status;
       }
     }
 
-    // Build sort
-    let sort = {};
-    switch (sortBy) {
-      case 'newest':
-        sort = { createdAt: -1 };
-        break;
-      case 'oldest':
-        sort = { createdAt: 1 };
-        break;
-      case 'amount_high':
-        sort = { amount: -1 };
-        break;
-      case 'amount_low':
-        sort = { amount: 1 };
-        break;
-      case 'date_recent':
-        sort = { paymentDate: -1 };
-        break;
-      case 'date_old':
-        sort = { paymentDate: 1 };
-        break;
-      default:
-        sort = { createdAt: -1 };
+    // Date range filter
+    if (dateFrom || dateTo) {
+      filter.paymentDate = {};
+      if (dateFrom) filter.paymentDate.$gte = new Date(dateFrom);
+      if (dateTo) filter.paymentDate.$lte = new Date(dateTo);
     }
+
+    // Amount range filter
+    if (minAmount || maxAmount) {
+      filter.amount = {};
+      if (minAmount) filter.amount.$gte = parseFloat(minAmount);
+      if (maxAmount) filter.amount.$lte = parseFloat(maxAmount);
+    }
+
+    // Build sort
+    const sortOptions = {
+      newest: { createdAt: -1 },
+      oldest: { createdAt: 1 },
+      amount_high: { amount: -1 },
+      amount_low: { amount: 1 },
+      date_recent: { paymentDate: -1 },
+      date_old: { paymentDate: 1 }
+    };
+    const sort = sortOptions[sortBy] || { createdAt: -1 };
 
     // Calculate pagination
     const skip = (page - 1) * limit;
 
-    // Fetch payments with pagination
-    const [payments, totalCount] = await Promise.all([
+    // Execute queries in parallel for better performance
+    const [payments, totalCount, statusCounts] = await Promise.all([
       Payment.find(filter)
         .populate('tenant', 'name email firstName lastName')
-        .populate('property', 'address type name')
-        .populate('lease', 'monthlyRent')
+        .populate('property', 'address type name city')
+        .populate('lease', 'monthlyRent status')
         .populate('recordedBy', 'name email firstName lastName')
         .sort(sort)
         .skip(skip)
         .limit(limit)
         .lean(),
-      Payment.countDocuments(filter)
+      
+      Payment.countDocuments(filter),
+      
+      // Get status distribution for the current filter
+      Payment.aggregate([
+        { $match: filter },
+        { $group: { _id: '$status', count: { $sum: 1 } } }
+      ])
     ]);
 
-    // For backward compatibility, also populate tenantId and propertyId fields
+    // Transform payments for backward compatibility
     const populatedPayments = payments.map(payment => ({
       ...payment,
       tenantId: payment.tenant,
-      propertyId: payment.property
+      propertyId: payment.property,
+      formattedAmount: `ZMW ${payment.amount?.toLocaleString() || '0.00'}`
     }));
 
     const totalPages = Math.ceil(totalCount / limit);
+    const statusCountsMap = statusCounts.reduce((acc, item) => {
+      acc[item._id] = item.count;
+      return acc;
+    }, {});
 
     return NextResponse.json({
       success: true,
-      payments: populatedPayments,
+      data: populatedPayments,
       pagination: {
         currentPage: page,
         totalPages,
@@ -126,167 +179,163 @@ export async function GET(request) {
         limit,
         hasNextPage: page < totalPages,
         hasPrevPage: page > 1
+      },
+      filters: {
+        statusCounts: statusCountsMap,
+        appliedFilters: {
+          status: status || 'all',
+          dateFrom,
+          dateTo,
+          minAmount,
+          maxAmount
+        }
       }
     });
 
   } catch (error) {
     console.error('Error fetching payments:', error);
+    
+    if (error.message === 'Rate limit exceeded') {
+      return NextResponse.json({ 
+        error: 'Too many requests. Please try again later.',
+        code: 'RATE_LIMITED'
+      }, { status: 429 });
+    }
+
     return NextResponse.json({ 
       error: 'Failed to fetch payments',
-      details: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
+      code: 'FETCH_ERROR',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
     }, { status: 500 });
   }
 }
 
-// POST - Create payment (for managers/landlords only)
+// POST - Create payment with enhanced validation
 export async function POST(request) {
   try {
-    await connectDB();
+    // Rate limiting for POST requests (stricter)
+    await limiter.check(request, 5, 'CACHE_TOKEN'); // 5 payments per minute per IP
+    
+    await dbConnect();
     
     const session = await getServerSession(authOptions);
     
     if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized - No valid session' }, { status: 401 });
+      return NextResponse.json({ 
+        error: 'Authentication required',
+        code: 'AUTH_REQUIRED'
+      }, { status: 401 });
     }
 
-    // Only managers and landlords can create payments via this endpoint
-    // Tenants use the /api/tenant/payments endpoint
-    if (!['manager', 'landlord', 'admin'].includes(session.user.role)) {
+    // Role-based access control
+    const allowedRoles = ['manager', 'landlord', 'admin'];
+    if (!allowedRoles.includes(session.user.role)) {
       return NextResponse.json({ 
-        error: 'Forbidden - Only managers and landlords can record payments directly' 
+        error: 'Insufficient permissions. Only managers, landlords, and admins can record payments directly.',
+        code: 'INSUFFICIENT_PERMISSIONS'
       }, { status: 403 });
     }
 
-    const { Payment, User, Property } = getModels();
+    const { Payment, User, Property, Lease, Notification } = getModels();
 
-    // Parse request body (JSON or FormData)
+    // Parse request body with validation
     let paymentData;
     const contentType = request.headers.get('content-type');
     
     if (contentType?.includes('application/json')) {
       const body = await request.json();
-      paymentData = {
-        amount: parseFloat(body.amount),
-        paymentDate: new Date(body.paymentDate),
-        paymentMethod: body.paymentMethod,
-        reference: body.reference,
-        description: body.description || '',
-        paymentType: body.paymentType || 'rent',
-        
-        // Get IDs from body
-        tenant: body.tenantId || body.tenant,
-        property: body.propertyId || body.property,
-        lease: body.leaseId || body.lease || null,
-        
-        // Status and approval
-        status: body.status || 'verified',
-        approvalStatus: 'approved',
-        approvedBy: session.user.id,
-        approvedAt: new Date(),
-        
-        // Record who created this
-        recordedBy: session.user.id,
-        receiptUrl: body.receiptUrl || null
-      };
-    } else {
-      // Handle FormData
+      paymentData = await validateAndTransformPaymentData(body, session);
+    } else if (contentType?.includes('multipart/form-data')) {
       const formData = await request.formData();
-      
-      paymentData = {
-        amount: parseFloat(formData.get('amount')),
-        paymentDate: new Date(formData.get('paymentDate')),
-        paymentMethod: formData.get('paymentMethod'),
-        reference: formData.get('reference'),
-        description: formData.get('description') || '',
-        paymentType: formData.get('paymentType') || 'rent',
-        
-        // Get IDs from form
-        tenant: formData.get('tenantId') || formData.get('tenant'),
-        property: formData.get('propertyId') || formData.get('property'),
-        lease: formData.get('leaseId') || formData.get('lease') || null,
-        
-        // Status and approval
-        status: formData.get('status') || 'verified',
-        approvalStatus: 'approved',
-        approvedBy: session.user.id,
-        approvedAt: new Date(),
-        
-        // Record who created this
-        recordedBy: session.user.id
-      };
-
-      // Handle file upload if present
-      const receiptFile = formData.get('receiptFile');
-      if (receiptFile && receiptFile.size > 0) {
-        // TODO: Implement file upload to cloud storage
-        paymentData.receiptUrl = `/uploads/receipts/${Date.now()}-${receiptFile.name}`;
-      }
+      paymentData = await validateAndTransformFormData(formData, session);
+    } else {
+      return NextResponse.json({ 
+        error: 'Unsupported content type',
+        code: 'INVALID_CONTENT_TYPE'
+      }, { status: 400 });
     }
 
-    // Validate required fields
-    if (!paymentData.amount || paymentData.amount <= 0) {
-      return NextResponse.json({ error: 'Valid payment amount is required' }, { status: 400 });
-    }
-
-    if (!paymentData.tenant) {
-      return NextResponse.json({ error: 'Tenant is required' }, { status: 400 });
-    }
-
-    if (!paymentData.property) {
-      return NextResponse.json({ error: 'Property is required' }, { status: 400 });
-    }
-
-    if (!paymentData.paymentMethod) {
-      return NextResponse.json({ error: 'Payment method is required' }, { status: 400 });
-    }
-
-    if (!paymentData.reference?.trim()) {
-      return NextResponse.json({ error: 'Payment reference is required' }, { status: 400 });
-    }
-
-    // Verify the tenant and property exist
-    const [tenant, property] = await Promise.all([
+    // Verify relationships exist and user has permission
+    const [tenant, property, lease] = await Promise.all([
       User.findById(paymentData.tenant),
-      Property.findById(paymentData.property)
+      Property.findById(paymentData.property),
+      paymentData.lease ? Lease.findById(paymentData.lease) : null
     ]);
 
-    if (!tenant) {
-      return NextResponse.json({ error: 'Tenant not found' }, { status: 404 });
+    if (!tenant || tenant.role !== 'tenant') {
+      return NextResponse.json({ 
+        error: 'Valid tenant not found',
+        code: 'TENANT_NOT_FOUND'
+      }, { status: 404 });
     }
 
     if (!property) {
-      return NextResponse.json({ error: 'Property not found' }, { status: 404 });
+      return NextResponse.json({ 
+        error: 'Property not found',
+        code: 'PROPERTY_NOT_FOUND'
+      }, { status: 404 });
     }
 
     // For landlords, verify they own the property
     if (session.user.role === 'landlord' && property.landlord.toString() !== session.user.id) {
       return NextResponse.json({ 
-        error: 'You can only record payments for your own properties' 
+        error: 'You can only record payments for your own properties',
+        code: 'PROPERTY_ACCESS_DENIED'
       }, { status: 403 });
     }
 
-    // Create the payment
-    const payment = new Payment(paymentData);
-    
-    // Add to approval history
-    if (!payment.approvalHistory) {
-      payment.approvalHistory = [];
-    }
-    
-    payment.approvalHistory.push({
-      action: 'approved',
-      user: session.user.id,
-      notes: `Payment recorded by ${session.user.role}`,
-      timestamp: new Date()
+    // Check for duplicate payments
+    const duplicateCheck = await Payment.findOne({
+      tenant: paymentData.tenant,
+      amount: paymentData.amount,
+      paymentDate: paymentData.paymentDate,
+      referenceNumber: paymentData.referenceNumber,
+      status: { $nin: ['cancelled', 'failed'] }
     });
 
-    await payment.save();
+    if (duplicateCheck) {
+      return NextResponse.json({ 
+        error: 'Duplicate payment detected',
+        code: 'DUPLICATE_PAYMENT',
+        existingPaymentId: duplicateCheck._id
+      }, { status: 409 });
+    }
+
+    // Create the payment with transaction
+    const session_db = await mongoose.startSession();
+    let payment;
+    
+    try {
+      await session_db.withTransaction(async () => {
+        payment = new Payment(paymentData);
+        await payment.save({ session: session_db });
+
+        // Create notification for tenant
+        await Notification.create([{
+          recipient: tenant._id,
+          sender: session.user.id,
+          type: 'payment_submitted',
+          title: 'Payment Recorded',
+          message: `A payment of ZMW ${payment.amount.toLocaleString()} has been recorded for your account.`,
+          relatedDocument: payment._id,
+          relatedDocumentModel: 'Payment',
+          priority: 'medium'
+        }], { session: session_db });
+
+        // Update lease balance if applicable
+        if (lease && payment.status === 'completed') {
+          await updateLeaseBalance(lease, payment.amount, session_db);
+        }
+      });
+    } finally {
+      await session_db.endSession();
+    }
 
     // Populate the created payment
     const populatedPayment = await Payment.findById(payment._id)
       .populate('tenant', 'name email firstName lastName')
-      .populate('property', 'address type name')
-      .populate('lease', 'monthlyRent')
+      .populate('property', 'address type name city')
+      .populate('lease', 'monthlyRent status')
       .populate('recordedBy', 'name email firstName lastName');
 
     return NextResponse.json({
@@ -297,199 +346,117 @@ export async function POST(request) {
 
   } catch (error) {
     console.error('Error creating payment:', error);
+    
+    if (error.message === 'Rate limit exceeded') {
+      return NextResponse.json({ 
+        error: 'Too many payment requests. Please try again later.',
+        code: 'RATE_LIMITED'
+      }, { status: 429 });
+    }
+
     return NextResponse.json({ 
       error: 'Failed to record payment',
-      details: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
+      code: 'CREATE_ERROR',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
     }, { status: 500 });
   }
 }
 
-// PUT - Update payment
-export async function PUT(request) {
-  try {
-    await connectDB();
+// Helper function to validate and transform payment data
+async function validateAndTransformPaymentData(body, session) {
+  const errors = [];
+
+  // Required field validation
+  if (!body.amount || parseFloat(body.amount) <= 0) {
+    errors.push('Valid payment amount is required');
+  }
+
+  if (!body.tenant && !body.tenantId) {
+    errors.push('Tenant is required');
+  }
+
+  if (!body.property && !body.propertyId) {
+    errors.push('Property is required');
+  }
+
+  if (!body.paymentMethod) {
+    errors.push('Payment method is required');
+  }
+
+  if (!body.referenceNumber?.trim()) {
+    errors.push('Payment reference is required');
+  }
+
+  if (!body.paymentDate) {
+    errors.push('Payment date is required');
+  }
+
+  // Amount validation
+  const amount = parseFloat(body.amount);
+  if (amount > 1000000) { // ZMW 1 million limit
+    errors.push('Payment amount exceeds maximum limit');
+  }
+
+  // Date validation
+  const paymentDate = new Date(body.paymentDate);
+  if (isNaN(paymentDate.getTime())) {
+    errors.push('Invalid payment date');
+  }
+
+  if (paymentDate > new Date()) {
+    errors.push('Payment date cannot be in the future');
+  }
+
+  if (errors.length > 0) {
+    throw new Error(`Validation failed: ${errors.join(', ')}`);
+  }
+
+  return {
+    amount: amount,
+    paymentDate: paymentDate,
+    paymentMethod: body.paymentMethod,
+    referenceNumber: body.referenceNumber.trim(),
+    description: body.description?.trim() || '',
+    paymentType: body.paymentType || 'rent',
     
-    const session = await getServerSession(authOptions);
+    // Relationships
+    tenant: body.tenant || body.tenantId,
+    property: body.property || body.propertyId,
+    lease: body.lease || body.leaseId || null,
     
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized - No valid session' }, { status: 401 });
-    }
-
-    // Only managers and admins can update payments
-    if (!['manager', 'admin'].includes(session.user.role)) {
-      return NextResponse.json({ 
-        error: 'Forbidden - Only managers and admins can update payments' 
-      }, { status: 403 });
-    }
-
-    const { Payment } = getModels();
-    const { searchParams } = new URL(request.url);
-    const paymentId = searchParams.get('id');
-
-    if (!paymentId) {
-      return NextResponse.json({ error: 'Payment ID is required' }, { status: 400 });
-    }
-
-    // Parse request body
-    let updateData;
-    const contentType = request.headers.get('content-type');
+    // Status and approval
+    status: body.status || 'pending',
+    approvalStatus: session.user.role === 'admin' ? 'approved' : 'pending',
+    approvedBy: session.user.role === 'admin' ? session.user.id : null,
+    approvedAt: session.user.role === 'admin' ? new Date() : null,
     
-    if (contentType?.includes('application/json')) {
-      const body = await request.json();
-      updateData = {
-        amount: body.amount ? parseFloat(body.amount) : undefined,
-        paymentDate: body.paymentDate ? new Date(body.paymentDate) : undefined,
-        paymentMethod: body.paymentMethod,
-        reference: body.reference,
-        description: body.description,
-        status: body.status,
-        approvalStatus: body.status === 'verified' ? 'approved' : body.approvalStatus,
-        receiptUrl: body.receiptUrl
-      };
-    } else {
-      // Handle FormData
-      const formData = await request.formData();
-      
-      updateData = {
-        amount: formData.get('amount') ? parseFloat(formData.get('amount')) : undefined,
-        paymentDate: formData.get('paymentDate') ? new Date(formData.get('paymentDate')) : undefined,
-        paymentMethod: formData.get('paymentMethod'),
-        reference: formData.get('reference'),
-        description: formData.get('description') || '',
-        status: formData.get('status'),
-        approvalStatus: formData.get('status') === 'verified' ? 'approved' : formData.get('approvalStatus')
-      };
-
-      // Handle file upload/removal
-      const receiptFile = formData.get('receiptFile');
-      const removeExistingReceipt = formData.get('removeExistingReceipt') === 'true';
-
-      if (removeExistingReceipt) {
-        updateData.receiptUrl = null;
-      } else if (receiptFile && receiptFile.size > 0) {
-        // TODO: Implement file upload to cloud storage
-        updateData.receiptUrl = `/uploads/receipts/${Date.now()}-${receiptFile.name}`;
-      }
-    }
-
-    // Remove undefined values
-    Object.keys(updateData).forEach(key => {
-      if (updateData[key] === undefined) {
-        delete updateData[key];
-      }
-    });
-
-    // Update the payment
-    const payment = await Payment.findByIdAndUpdate(
-      paymentId,
-      updateData,
-      { new: true, runValidators: true }
-    )
-    .populate('tenant', 'name email firstName lastName')
-    .populate('property', 'address type name')
-    .populate('lease', 'monthlyRent')
-    .populate('recordedBy', 'name email firstName lastName');
-
-    if (!payment) {
-      return NextResponse.json({ error: 'Payment not found' }, { status: 404 });
-    }
-
-    // Add to approval history
-    if (!payment.approvalHistory) {
-      payment.approvalHistory = [];
-    }
+    // Audit fields
+    recordedBy: session.user.id,
+    createdBy: session.user.id,
     
-    payment.approvalHistory.push({
-      action: 'updated',
+    // Approval history
+    approvalHistory: [{
+      action: 'created',
       user: session.user.id,
-      notes: `Payment updated by ${session.user.role}`,
+      notes: `Payment recorded by ${session.user.role}`,
       timestamp: new Date()
-    });
-
-    await payment.save();
-
-    return NextResponse.json({
-      success: true,
-      data: payment,
-      message: 'Payment updated successfully'
-    });
-
-  } catch (error) {
-    console.error('Error updating payment:', error);
-    return NextResponse.json({ 
-      error: 'Failed to update payment',
-      details: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
-    }, { status: 500 });
-  }
+    }]
+  };
 }
 
-// DELETE - Cancel payment
-export async function DELETE(request) {
-  try {
-    await connectDB();
-    
-    const session = await getServerSession(authOptions);
-    
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized - No valid session' }, { status: 401 });
-    }
-
-    // Only managers and admins can cancel payments
-    if (!['manager', 'admin'].includes(session.user.role)) {
-      return NextResponse.json({ 
-        error: 'Forbidden - Only managers and admins can cancel payments' 
-      }, { status: 403 });
-    }
-
-    const { Payment } = getModels();
-    const { searchParams } = new URL(request.url);
-    const paymentId = searchParams.get('id');
-
-    if (!paymentId) {
-      return NextResponse.json({ error: 'Payment ID is required' }, { status: 400 });
-    }
-
-    // Update payment status to cancelled
-    const payment = await Payment.findByIdAndUpdate(
-      paymentId,
-      { 
-        status: 'cancelled',
-        approvalStatus: 'rejected',
-        rejectionReason: 'Payment cancelled by manager',
-        cancelledBy: session.user.id,
-        cancelledAt: new Date()
-      },
-      { new: true }
-    );
-
-    if (!payment) {
-      return NextResponse.json({ error: 'Payment not found' }, { status: 404 });
-    }
-
-    // Add to approval history
-    if (!payment.approvalHistory) {
-      payment.approvalHistory = [];
-    }
-    
-    payment.approvalHistory.push({
-      action: 'cancelled',
-      user: session.user.id,
-      notes: `Payment cancelled by ${session.user.role}`,
-      timestamp: new Date()
-    });
-
-    await payment.save();
-
-    return NextResponse.json({
-      success: true,
-      message: 'Payment cancelled successfully'
-    });
-
-  } catch (error) {
-    console.error('Error cancelling payment:', error);
-    return NextResponse.json({ 
-      error: 'Failed to cancel payment',
-      details: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
-    }, { status: 500 });
+// Helper function to update lease balance
+async function updateLeaseBalance(lease, paymentAmount, session) {
+  lease.totalPaid = (lease.totalPaid || 0) + paymentAmount;
+  lease.balanceDue = Math.max(0, (lease.balanceDue || 0) - paymentAmount);
+  lease.lastPaymentDate = new Date();
+  
+  // Update next payment due if this covers monthly rent
+  if (paymentAmount >= lease.monthlyRent && lease.status === 'active') {
+    const nextDue = new Date(lease.nextPaymentDue || lease.startDate);
+    nextDue.setMonth(nextDue.getMonth() + Math.floor(paymentAmount / lease.monthlyRent));
+    lease.nextPaymentDue = nextDue;
   }
+  
+  await lease.save({ session });
 }
+

@@ -32,6 +32,7 @@ const NotificationSchema = new mongoose.Schema({
       'property_inquiry',
       'account_approved',
       'property_approved',
+      'property_request_approved',
       'request_rejected'
     ],
     required: true
@@ -55,7 +56,7 @@ const NotificationSchema = new mongoose.Schema({
   
   relatedDocumentModel: {
     type: String,
-    enum: ['Payment', 'Lease', 'Property', 'MaintenanceRequest', 'Invoice', 'PropertyRequest']
+    enum: ['Payment', 'Lease', 'Property', 'Maintenance', 'Invoice', 'PropertyRequest']
   },
   
   // New specific relation fields for property request system

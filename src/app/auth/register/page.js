@@ -1,4 +1,4 @@
-// app/auth/register/page.js - Updated with Property Selection
+// app/auth/register/page.js - Fixed version
 'use client';
 
 import { useState, useEffect } from 'react';
@@ -224,11 +224,26 @@ export default function RegisterPage() {
     if (formData.password !== formData.confirmPassword) {
       newErrors.confirmPassword = 'Passwords do not match';
     }
+// Normalize input: remove whitespace, dashes, parentheses
+let cleanedPhone = formData.phone?.replace(/[\s\-\(\)]/g, '');
 
-    // Phone validation
-    if (formData.phone && !/^[\+]?[1-9][\d]{0,15}$/.test(formData.phone.replace(/[\s\-\(\)]/g, ''))) {
-      newErrors.phone = 'Please enter a valid phone number';
-    }
+// Standardize to international format starting with +260
+if (/^0[7-9]\d{8}$/.test(cleanedPhone)) {
+  cleanedPhone = '+260' + cleanedPhone.slice(1);
+} else if (/^[7-9]\d{8}$/.test(cleanedPhone)) {
+  cleanedPhone = '+260' + cleanedPhone;
+} else if (/^260[7-9]\d{8}$/.test(cleanedPhone)) {
+  cleanedPhone = '+' + cleanedPhone;
+}
+
+// Validate cleaned phone number
+if (!/^\+260(77|76|95|96|97|99)\d{7}$/.test(cleanedPhone)) {
+  newErrors.phone = 'Please enter a valid Zambian phone number';
+} else {
+  formData.phone = cleanedPhone; // ✅ Set the cleaned number back
+}
+
+    
 
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
@@ -306,8 +321,8 @@ export default function RegisterPage() {
         setSuccess(true);
         // Redirect based on role and whether property request was made
         const redirectUrl = selectedRole === 'tenant' && (selectedProperty || propertyNotFound)
-          ? '/auth/signin?message=Registration successful. Your property request has been sent to the landlord.'
-          : '/auth/signin?message=Registration successful. Please sign in.';
+          ? '/auth/login?message=Registration successful. Your property request has been sent to the landlord.'
+          : '/auth/login?message=Registration successful. Please sign in.';
         
         setTimeout(() => {
           router.push(redirectUrl);
@@ -484,8 +499,6 @@ export default function RegisterPage() {
           </div>
         )}
 
-        {/* Step 2: Registration Form - Same as before but will continue... */}
-        {/* I'll continue this in the next artifact due to length limits */}
         {/* Step 2: Registration Form */}
         {step === 2 && (
           <div className="bg-white py-8 px-6 shadow sm:rounded-lg">
@@ -509,9 +522,6 @@ export default function RegisterPage() {
             )}
 
             <form onSubmit={(e) => { e.preventDefault(); handleFormSubmit(); }} className="space-y-6">
-              {/* All form fields same as original - Name, Email, Phone, etc. */}
-              {/* ... (keeping the same form fields as before) ... */}
-              
               {/* Name */}
               <div>
                 <label htmlFor="name" className="block text-sm font-medium text-gray-700">
@@ -586,7 +596,7 @@ export default function RegisterPage() {
                     className={`appearance-none block w-full pl-10 pr-3 py-2 border rounded-md placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm ${
                       errors.phone ? 'border-red-300' : 'border-gray-300'
                     }`}
-                    placeholder="Enter your phone number"
+                    placeholder="+260"
                     disabled={isLoading}
                   />
                 </div>
@@ -793,27 +803,6 @@ export default function RegisterPage() {
                     </>
                   ) : (
                     <>
-                      Create {roleConfig[selectedRole]?.title}
-                      <ArrowRight className="ml-2 w-4 h-4 group-hover:translate-x-1 transition-transform" />
-                    </>
-                  )}
-                </button>
-              </div>
-            
-              {/* Submit Button */}
-              <div>
-                <button
-                  type="submit"
-                  disabled={isLoading}
-                  className="group relative w-full flex justify-center py-2 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                >
-                  {isLoading ? (
-                    <>
-                      <Loader2 className="w-4 h-4 animate-spin mr-2" />
-                      Creating Account...
-                    </>
-                  ) : (
-                    <>
                       {selectedRole === 'tenant' ? 'Continue to Property Selection' : `Create ${roleConfig[selectedRole]?.title}`}
                       <ArrowRight className="ml-2 w-4 h-4 group-hover:translate-x-1 transition-transform" />
                     </>
@@ -948,7 +937,7 @@ export default function RegisterPage() {
                     <h3 className="font-medium text-green-900">Property Selected</h3>
                   </div>
                   <p className="text-green-700 text-sm mb-4">
-                    {`You've selected {selectedProperty.address}. Your request will be sent to the landlord for approval.`}
+                    You&apos;ve selected {selectedProperty.address}. Your request will be sent to the landlord for approval.
                   </p>
                   <button
                     onClick={handleFinalSubmit}
@@ -1003,7 +992,7 @@ export default function RegisterPage() {
                 <Building className="w-12 h-12 text-blue-600 mx-auto mb-4" />
                 <h3 className="text-lg font-semibold text-gray-900">Request Property Listing</h3>
                 <p className="text-gray-600">
-                  {`Tell us about the property you're looking for and we'll contact the landlord to list it.`}
+                  Tell us about the property you&apos;re looking for and we&apos;ll contact the landlord to list it.
                 </p>
               </div>
 
@@ -1129,7 +1118,7 @@ export default function RegisterPage() {
                         value={propertyRequest.landlordPhone}
                         onChange={handlePropertyRequestChange}
                         className="block w-full px-3 py-2 border border-gray-300 rounded-md placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
-                        placeholder="+1 (555) 123-4567"
+                        placeholder="+260 123 456 789"
                       />
                     </div>
                   </div>

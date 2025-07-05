@@ -4,392 +4,197 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { 
-  ArrowLeft, 
-  Download, 
-  CheckCircle, 
-  XCircle, 
-  Clock, 
-  User, 
-  Home, 
-  Calendar, 
-  CreditCard,
-  FileText,
-  AlertCircle,
-  Edit,
-  Trash2,
-  MoreVertical
+import {
+  ArrowLeft, Download, CheckCircle, XCircle, Clock,
+  Home, CreditCard, FileText, AlertCircle, Edit, MoreVertical,
+  Smartphone, Copy, Send, Mail, MessageCircle, RefreshCw
 } from 'lucide-react';
 
 export default function PaymentDetailClient({ payment, currentUser }) {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
-  const [showActions, setShowActions] = useState(false);
+  const [modals, setModals] = useState({ actions: false, receipt: false, approval: false });
+  const [approvalNotes, setApprovalNotes] = useState('');
+  const [rejectionReason, setRejectionReason] = useState('');
 
-  // Helper functions
-  const formatCurrency = (amount) => {
-    return new Intl.NumberFormat('en-ZM', {
-      style: 'currency',
-      currency: 'ZMW'
-    }).format(amount);
+  const formatCurrency = (amt) => new Intl.NumberFormat('en-ZM', { style: 'currency', currency: 'ZMW' }).format(amt);
+  const formatDate = (d) => new Date(d).toLocaleString('en-ZM', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+  const statusClasses = {
+    completed: 'bg-green-100 text-green-700',
+    approved: 'bg-green-100 text-green-700',
+    verified: 'bg-green-100 text-green-700',
+    pending: 'bg-yellow-100 text-yellow-700',
+    failed: 'bg-red-100 text-red-700',
+    rejected: 'bg-red-100 text-red-700',
+    cancelled: 'bg-gray-100 text-gray-700'
   };
 
-  const formatDate = (date) => {
-    return new Date(date).toLocaleDateString('en-ZM', {
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
-    });
+  const statusIcons = {
+    completed: <CheckCircle className="w-4 h-4 text-green-600" />, approved: <CheckCircle className="w-4 h-4 text-green-600" />, verified: <CheckCircle className="w-4 h-4 text-green-600" />,
+    pending: <Clock className="w-4 h-4 text-yellow-500" />, failed: <XCircle className="w-4 h-4 text-red-500" />, rejected: <XCircle className="w-4 h-4 text-red-500" />, cancelled: <XCircle className="w-4 h-4 text-gray-400" />
   };
 
-  const getStatusIcon = (status) => {
-    switch (status) {
-      case 'completed':
-      case 'approved':
-        return <CheckCircle className="w-5 h-5 text-green-500" />;
-      case 'pending':
-        return <Clock className="w-5 h-5 text-yellow-500" />;
-      case 'failed':
-      case 'rejected':
-        return <XCircle className="w-5 h-5 text-red-500" />;
-      case 'cancelled':
-        return <XCircle className="w-5 h-5 text-gray-500" />;
-      default:
-        return <AlertCircle className="w-5 h-5 text-gray-500" />;
-    }
-  };
+  const canAct = (role) => ['manager', 'admin'].includes(currentUser.role) || (currentUser.role === 'landlord' && payment.property?.landlord === currentUser.id);
+  const canEdit = () => canAct();
+  const canApprove = () => canAct() && payment.approvalStatus === 'pending';
+  const canSendReceipt = () => ['manager', 'admin', 'landlord'].includes(currentUser.role) && ['completed', 'verified', 'approved'].includes(payment.status);
 
-  const getStatusColor = (status) => {
-    switch (status) {
-      case 'completed':
-      case 'approved':
-        return 'bg-green-100 text-green-800 border-green-200';
-      case 'pending':
-        return 'bg-yellow-100 text-yellow-800 border-yellow-200';
-      case 'failed':
-      case 'rejected':
-        return 'bg-red-100 text-red-800 border-red-200';
-      case 'cancelled':
-        return 'bg-gray-100 text-gray-800 border-gray-200';
-      default:
-        return 'bg-gray-100 text-gray-800 border-gray-200';
-    }
-  };
-
-  const canEdit = () => {
-    return ['manager', 'admin'].includes(currentUser.role) || 
-           (currentUser.role === 'landlord' && payment.property?.landlord === currentUser.id);
-  };
-
-  const canApprove = () => {
-    return ['manager', 'admin'].includes(currentUser.role) && 
-           payment.approvalStatus === 'pending';
-  };
-
-  const handleApprove = async () => {
-    if (!confirm('Are you sure you want to approve this payment?')) return;
-    
+  const handlePost = async (url, data, callback, failMsg) => {
     setLoading(true);
     try {
-      const response = await fetch(`/api/payments/${payment._id}/approve`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ notes: 'Approved via payment details' })
-      });
-
-      if (response.ok) {
-        router.refresh();
-      } else {
-        alert('Failed to approve payment');
-      }
-    } catch (error) {
-      console.error('Error approving payment:', error);
-      alert('Failed to approve payment');
+      const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.message || failMsg);
+      callback?.();
+    } catch (err) {
+      alert(err.message);
     } finally {
       setLoading(false);
     }
   };
 
-  const handleReject = async () => {
-    const reason = prompt('Please provide a reason for rejection:');
-    if (!reason) return;
-    
-    setLoading(true);
-    try {
-      const response = await fetch(`/api/payments/${payment._id}/reject`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ reason })
-      });
+  const approve = () => handlePost(`/api/payments/${payment._id}/approve`, { notes: approvalNotes || 'Approved' }, () => {
+    setModals({ ...modals, approval: false });
+    setApprovalNotes('');
+    router.refresh();
+  }, 'Failed to approve');
 
-      if (response.ok) {
-        router.refresh();
-      } else {
-        alert('Failed to reject payment');
-      }
-    } catch (error) {
-      console.error('Error rejecting payment:', error);
-      alert('Failed to reject payment');
-    } finally {
-      setLoading(false);
+  const reject = () => {
+    if (!rejectionReason.trim()) return alert('Rejection reason required');
+    handlePost(`/api/payments/${payment._id}/reject`, { reason: rejectionReason }, () => {
+      setModals({ ...modals, approval: false });
+      setRejectionReason('');
+      router.refresh();
+    }, 'Failed to reject');
+  };
+
+  const sendReceipt = (method) => handlePost(`/api/payments/${payment._id}/send-receipt`, { method }, () => {
+    alert(`Sent via ${method}`);
+    setModals({ ...modals, receipt: false });
+  }, 'Failed to send');
+
+  const downloadReceipt = async () => {
+    try {
+      const res = await fetch(`/api/payments/${payment._id}/receipt`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `receipt-${payment.receiptNumber}.pdf`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      alert('Download failed');
     }
   };
 
-  const handleDownloadReceipt = () => {
-    // TODO: Implement receipt download
-    alert('Receipt download will be implemented');
-  };
+  const copyText = async (txt) => navigator.clipboard.writeText(txt).then(() => alert('Copied'));
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <div className="container mx-auto p-4 max-w-4xl">
-        {/* Header */}
-        <div className="flex items-center justify-between mb-6">
-          <div className="flex items-center space-x-4">
-            <button
-              onClick={() => router.back()}
-              className="flex items-center text-gray-600 hover:text-gray-900 transition-colors"
-            >
-              <ArrowLeft className="w-5 h-5 mr-2" />
-              Back
-            </button>
-            <div>
-              <h1 className="text-2xl font-bold text-gray-900">
-                Payment Details
-              </h1>
-              <p className="text-gray-600">
-                Receipt #{payment.receiptNumber}
-              </p>
-            </div>
-          </div>
-
-          {/* Actions Menu */}
+    <div className="min-h-screen bg-gray-50 p-4">
+      <div className="max-w-4xl mx-auto">
+        <div className="flex justify-between items-center mb-6">
+          <button onClick={() => router.back()} className="flex items-center text-gray-700 hover:underline">
+            <ArrowLeft className="w-4 h-4 mr-2" />Back
+          </button>
           <div className="relative">
-            <button
-              onClick={() => setShowActions(!showActions)}
-              className="flex items-center px-3 py-2 text-gray-600 hover:text-gray-900 border border-gray-300 rounded-md"
-            >
+            <button onClick={() => setModals({ ...modals, actions: !modals.actions })} className="p-2 border rounded-md">
               <MoreVertical className="w-4 h-4" />
             </button>
-            
-            {showActions && (
-              <div className="absolute right-0 mt-2 w-48 bg-white rounded-md shadow-lg border border-gray-200 z-10">
-                <div className="py-1">
-                  <button
-                    onClick={handleDownloadReceipt}
-                    className="flex items-center w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
-                  >
-                    <Download className="w-4 h-4 mr-3" />
-                    Download Receipt
+            {modals.actions && (
+              <div className="absolute right-0 mt-2 w-48 bg-white border rounded shadow z-10">
+                <button onClick={downloadReceipt} className="w-full text-left px-4 py-2 hover:bg-gray-50 flex items-center text-sm">
+                  <Download className="w-4 h-4 mr-2" />Download Receipt
+                </button>
+                {canSendReceipt() && (
+                  <button onClick={() => setModals({ ...modals, receipt: true })} className="w-full text-left px-4 py-2 hover:bg-gray-50 flex items-center text-sm">
+                    <Send className="w-4 h-4 mr-2" />Send Receipt
                   </button>
-                  
-                  {canEdit() && (
-                    <Link
-                      href={`/payments/${payment._id}/edit`}
-                      className="flex items-center w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
-                    >
-                      <Edit className="w-4 h-4 mr-3" />
-                      Edit Payment
-                    </Link>
-                  )}
-                  
-                  {canApprove() && (
-                    <>
-                      <button
-                        onClick={handleApprove}
-                        disabled={loading}
-                        className="flex items-center w-full px-4 py-2 text-sm text-green-700 hover:bg-green-50"
-                      >
-                        <CheckCircle className="w-4 h-4 mr-3" />
-                        Approve
-                      </button>
-                      <button
-                        onClick={handleReject}
-                        disabled={loading}
-                        className="flex items-center w-full px-4 py-2 text-sm text-red-700 hover:bg-red-50"
-                      >
-                        <XCircle className="w-4 h-4 mr-3" />
-                        Reject
-                      </button>
-                    </>
-                  )}
-                </div>
+                )}
+                {canEdit() && (
+                  <Link href={`/payments/${payment._id}/edit`} className="block px-4 py-2 hover:bg-gray-50 flex items-center text-sm">
+                    <Edit className="w-4 h-4 mr-2" />Edit
+                  </Link>
+                )}
+                {canApprove() && (
+                  <button onClick={() => setModals({ ...modals, approval: true })} className="w-full text-left px-4 py-2 hover:bg-gray-50 flex items-center text-sm">
+                    <CheckCircle className="w-4 h-4 mr-2 text-green-600" />Approve/Reject
+                  </button>
+                )}
               </div>
             )}
           </div>
         </div>
 
-        {/* Payment Overview */}
-        <div className="bg-white rounded-lg shadow-sm border border-gray-200 mb-6">
-          <div className="p-6">
-            <div className="flex items-center justify-between mb-4">
-              <div>
-                <h2 className="text-3xl font-bold text-gray-900">
-                  {formatCurrency(payment.amount)}
-                </h2>
-                <p className="text-gray-600 capitalize">
-                  {payment.paymentType} payment
-                </p>
+        <div className="bg-white p-6 rounded-md border space-y-4">
+          <div className="flex justify-between items-center">
+            <h1 className="text-2xl font-bold">Receipt #{payment.receiptNumber}</h1>
+            <div className={`text-sm px-3 py-1 rounded-full border ${statusClasses[payment.status] || 'bg-gray-100 text-gray-700'}`}>
+              <div className="flex items-center space-x-2">
+                {statusIcons[payment.status] || <AlertCircle className="w-4 h-4 text-gray-500" />}<span className="capitalize">{payment.status}</span>
               </div>
-              <div className="text-right">
-                <div className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium border ${getStatusColor(payment.status)}`}>
-                  {getStatusIcon(payment.status)}
-                  <span className="ml-2 capitalize">{payment.status}</span>
-                </div>
-                {payment.approvalStatus !== payment.status && (
-                  <div className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium border mt-2 ${getStatusColor(payment.approvalStatus)}`}>
-                    {getStatusIcon(payment.approvalStatus)}
-                    <span className="ml-2 capitalize">{payment.approvalStatus}</span>
-                  </div>
+            </div>
+          </div>
+
+          <div className="grid md:grid-cols-2 gap-4">
+            <div>
+              <p className="text-gray-600">Amount</p>
+              <p className="font-semibold text-lg">{formatCurrency(payment.amount)}</p>
+            </div>
+            <div>
+              <p className="text-gray-600">Date</p>
+              <p className="font-medium">{formatDate(payment.paymentDate)}</p>
+            </div>
+            <div>
+              <p className="text-gray-600">Method</p>
+              <p className="capitalize flex items-center">{payment.paymentMethod} {payment.paymentMethod === 'mobile_money' && <Smartphone className="ml-1 w-4 h-4" />}</p>
+            </div>
+            <div>
+              <p className="text-gray-600">Reference</p>
+              <div className="flex items-center">
+                <span>{payment.referenceNumber || 'N/A'}</span>
+                {payment.referenceNumber && (
+                  <button onClick={() => copyText(payment.referenceNumber)} className="ml-2">
+                    <Copy className="w-3 h-3" />
+                  </button>
                 )}
               </div>
             </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              {/* Payment Details */}
-              <div>
-                <h3 className="text-lg font-semibold text-gray-900 mb-3 flex items-center">
-                  <CreditCard className="w-5 h-5 mr-2" />
-                  Payment Details
-                </h3>
-                <div className="space-y-3">
-                  <div className="flex justify-between">
-                    <span className="text-gray-600">Date:</span>
-                    <span className="font-medium">{formatDate(payment.paymentDate)}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-600">Method:</span>
-                    <span className="font-medium capitalize">{payment.paymentMethod.replace('_', ' ')}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-600">Reference:</span>
-                    <span className="font-medium">{payment.referenceNumber || 'N/A'}</span>
-                  </div>
-                  {payment.lateFee > 0 && (
-                    <div className="flex justify-between">
-                      <span className="text-gray-600">Late Fee:</span>
-                      <span className="font-medium text-red-600">{formatCurrency(payment.lateFee)}</span>
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {/* Property & Tenant Info */}
-              <div>
-                <h3 className="text-lg font-semibold text-gray-900 mb-3 flex items-center">
-                  <Home className="w-5 h-5 mr-2" />
-                  Property & Tenant
-                </h3>
-                <div className="space-y-3">
-                  <div>
-                    <span className="text-gray-600 block">Property:</span>
-                    <span className="font-medium">{payment.property?.address || payment.property?.name}</span>
-                  </div>
-                  <div>
-                    <span className="text-gray-600 block">Tenant:</span>
-                    <span className="font-medium">
-                      {payment.tenant?.name || 
-                       `${payment.tenant?.firstName} ${payment.tenant?.lastName}`.trim() ||
-                       'Unknown Tenant'}
-                    </span>
-                  </div>
-                  {payment.tenant?.email && (
-                    <div>
-                      <span className="text-gray-600 block">Email:</span>
-                      <span className="font-medium">{payment.tenant.email}</span>
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            {/* Description */}
-            {payment.description && (
-              <div className="mt-6 pt-6 border-t border-gray-200">
-                <h3 className="text-lg font-semibold text-gray-900 mb-2 flex items-center">
-                  <FileText className="w-5 h-5 mr-2" />
-                  Description
-                </h3>
-                <p className="text-gray-700">{payment.description}</p>
-              </div>
-            )}
           </div>
-        </div>
 
-        {/* Approval History */}
-        {payment.approvalHistory && payment.approvalHistory.length > 0 && (
-          <div className="bg-white rounded-lg shadow-sm border border-gray-200 mb-6">
-            <div className="p-6">
-              <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
-                <Clock className="w-5 h-5 mr-2" />
-                Approval History
-              </h3>
-              <div className="space-y-4">
-                {payment.approvalHistory.map((entry, index) => (
-                  <div key={index} className="flex items-start space-x-3">
-                    <div className={`flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center ${getStatusColor(entry.action)}`}>
-                      {getStatusIcon(entry.action)}
-                    </div>
-                    <div className="flex-1">
-                      <div className="flex items-center justify-between">
-                        <span className="font-medium capitalize">{entry.action}</span>
-                        <span className="text-sm text-gray-500">
-                          {formatDate(entry.timestamp)}
-                        </span>
-                      </div>
-                      {entry.notes && (
-                        <p className="text-gray-600 text-sm mt-1">{entry.notes}</p>
-                      )}
-                    </div>
-                  </div>
+          <div className="border-t pt-4">
+            <p className="text-sm text-gray-600">Property: {payment.property?.name || payment.property?.address}</p>
+            <p className="text-sm text-gray-600">Tenant: {payment.tenant?.name || `${payment.tenant?.firstName} ${payment.tenant?.lastName}`}</p>
+          </div>
+
+          <div>
+            <h3 className="text-md font-semibold mb-1">Description</h3>
+            <p className="text-gray-700 text-sm">
+              {payment.description} {payment.paymentPeriod ? `(for ${payment.paymentPeriod.month})` : ''}
+            </p>
+          </div>
+
+          {payment.approvalHistory?.length > 0 && (
+            <div>
+              <h4 className="text-sm font-medium text-gray-800 mb-2">Approval History</h4>
+              <ul className="text-sm space-y-1">
+                {payment.approvalHistory.map((entry, i) => (
+                  <li key={i} className="flex justify-between border-b pb-1">
+                    <span className="capitalize">{entry.action}</span>
+                    <span className="text-gray-500">{formatDate(entry.timestamp)}</span>
+                  </li>
                 ))}
-              </div>
+              </ul>
             </div>
-          </div>
-        )}
-
-        {/* Rejection Reason */}
-        {payment.rejectionReason && (
-          <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-6">
-            <div className="flex items-start">
-              <XCircle className="w-5 h-5 text-red-500 mt-0.5 mr-3 flex-shrink-0" />
-              <div>
-                <h3 className="text-sm font-medium text-red-800">Rejection Reason</h3>
-                <p className="text-sm text-red-700 mt-1">{payment.rejectionReason}</p>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Quick Actions */}
-        <div className="flex flex-wrap gap-3">
-          <Link
-            href="/payments"
-            className="inline-flex items-center px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 transition-colors"
-          >
-            All Payments
-          </Link>
-          
-          {payment.property && (
-            <Link
-              href={`/properties/${payment.property._id}`}
-              className="inline-flex items-center px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 transition-colors"
-            >
-              <Home className="w-4 h-4 mr-2" />
-              View Property
-            </Link>
           )}
-          
-          {payment.lease && (
-            <Link
-              href={`/leases/${payment.lease._id}`}
-              className="inline-flex items-center px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 transition-colors"
-            >
-              <FileText className="w-4 h-4 mr-2" />
-              View Lease
-            </Link>
+
+          {canSendReceipt() && (
+            <div className="flex gap-4 mt-4">
+              <button onClick={() => sendReceipt('email')} className="px-4 py-2 bg-blue-600 text-white rounded">Send Email</button>
+              <button onClick={() => sendReceipt('whatsapp')} className="px-4 py-2 bg-green-600 text-white rounded">Send WhatsApp</button>
+              <button onClick={() => sendReceipt('sms')} className="px-4 py-2 bg-gray-600 text-white rounded">Send SMS</button>
+            </div>
           )}
         </div>
       </div>

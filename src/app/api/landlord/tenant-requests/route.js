@@ -1,81 +1,62 @@
-// src/app/api/landlord/tenant-requests/route.js
+// app/api/landlord/tenant-requests/route.js - Get landlord's tenant requests
 import { getServerSession } from 'next-auth';
-import { authOptions } from '../../auth/[...nextauth]/route';
-import { NextResponse } from 'next/server';
+import { authOptions } from '@/app/api/auth/[...nextauth]/route';
 import dbConnect from 'lib/db';
 import PropertyRequest from 'models/PropertyRequest';
-import Property from 'models/Property';
 
-// GET - Fetch landlord's tenant requests
-export async function GET() {
+export async function GET(request) {
   try {
     const session = await getServerSession(authOptions);
-    
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
-    // Only allow landlords
-    if (session.user.role !== 'landlord') {
-      return NextResponse.json({ error: 'Forbidden - Landlord access only' }, { status: 403 });
+    if (!session?.user || session.user.role !== 'landlord') {
+      return Response.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
     await dbConnect();
 
-    // Fetch property requests for this landlord
-    const propertyRequests = await PropertyRequest.find({ 
-      landlord: session.user.id 
-    })
+    const { searchParams } = new URL(request.url);
+    const status = searchParams.get('status');
+    const page = parseInt(searchParams.get('page')) || 1;
+    const limit = parseInt(searchParams.get('limit')) || 10;
+    const skip = (page - 1) * limit;
+
+    let filter = { landlord: session.user.id };
+    if (status) {
+      filter.status = status;
+    }
+
+    const requests = await PropertyRequest.find(filter)
       .populate('tenant', 'name email phone')
-      .populate('property', 'address monthlyRent type bedrooms bathrooms')
+      .populate('property', 'address city monthlyRent type')
       .sort({ createdAt: -1 })
+      .limit(limit)
+      .skip(skip)
       .lean();
 
-    // Also fetch requests where landlord owns the requested property (existing property requests)
-    const ownedProperties = await Property.find({ landlord: session.user.id }).select('_id');
-    const propertyIds = ownedProperties.map(p => p._id);
+    const total = await PropertyRequest.countDocuments(filter);
 
-    const existingPropertyRequests = await PropertyRequest.find({
-      property: { $in: propertyIds },
-      landlord: { $ne: session.user.id } // Don't duplicate requests already fetched above
-    })
-      .populate('tenant', 'name email phone')
-      .populate('property', 'address monthlyRent type bedrooms bathrooms')
-      .sort({ createdAt: -1 })
-      .lean();
+    // Get status counts for dashboard
+    const statusCounts = await PropertyRequest.aggregate([
+      { $match: { landlord: session.user.id } },
+      { $group: { _id: '$status', count: { $sum: 1 } } }
+    ]);
 
-    // Combine and deduplicate requests
-    const allRequests = [...propertyRequests, ...existingPropertyRequests];
-    const uniqueRequests = allRequests.filter((request, index, self) => 
-      index === self.findIndex(r => r._id.toString() === request._id.toString())
-    );
+    const counts = statusCounts.reduce((acc, item) => {
+      acc[item._id] = item.count;
+      return acc;
+    }, {});
 
-    // Add additional metadata
-    const enrichedRequests = uniqueRequests.map(request => ({
-      ...request,
-      _id: request._id.toString(),
-      tenant: request.tenant ? {
-        ...request.tenant,
-        _id: request.tenant._id.toString()
-      } : null,
-      property: request.property ? {
-        ...request.property,
-        _id: request.property._id.toString()
-      } : null,
-      isUrgent: request.createdAt > new Date(Date.now() - 24 * 60 * 60 * 1000), // Created in last 24 hours
-      daysOld: Math.floor((new Date() - new Date(request.createdAt)) / (1000 * 60 * 60 * 24))
-    }));
-
-    return NextResponse.json({
-      success: true,
-      data: enrichedRequests
+    return Response.json({
+      requests,
+      statusCounts: counts,
+      pagination: {
+        current: page,
+        pages: Math.ceil(total / limit),
+        total
+      }
     });
 
   } catch (error) {
     console.error('Error fetching tenant requests:', error);
-    return NextResponse.json({ 
-      error: 'Failed to fetch tenant requests'
-    }, { status: 500 });
+    return Response.json({ error: 'Failed to fetch tenant requests' }, { status: 500 });
   }
 }
-

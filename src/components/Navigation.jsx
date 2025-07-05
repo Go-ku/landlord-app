@@ -145,7 +145,7 @@ export default function Navigation() {
       setIsSigningOut(true);
       await signOut({ 
         redirect: true,
-        callbackUrl: '/login'
+        callbackUrl: '/auth/login'
       });
     } catch (error) {
       console.error('Sign out error:', error);

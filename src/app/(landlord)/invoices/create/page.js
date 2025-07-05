@@ -2,14 +2,14 @@
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/app/api/auth/[...nextauth]/route';
 import { redirect } from 'next/navigation';
+import Link from 'next/link';
 import dbConnect from 'lib/db';
-// import User from 'models/User';
-// import Property from 'models/Property';
-// import Lease from 'models/Lease';
 import CreateInvoiceClient from './CreateInvoiceClient';
-import { Link } from 'lucide-react';
-// Instead of individual imports
-import { Invoice, Payment, User, Property, Lease } from 'models';
+
+// Import models - using individual imports for better tree shaking
+import User from 'models/User';
+import Property from 'models/Property';
+import Lease from 'models/Lease';
 
 // Helper function to serialize MongoDB data
 function serializeData(data) {
@@ -42,17 +42,31 @@ async function getInvoiceFormData(userId, userRole) {
       const landlordProperties = await Property.find(propertyQuery).select('_id').lean();
       const propertyIds = landlordProperties.map(p => p._id);
       
+      if (propertyIds.length === 0) {
+        return {
+          tenants: [],
+          properties: [],
+          leases: [],
+          currentUser: { id: userId, role: userRole }
+        };
+      }
+      
       // Get leases for landlord's properties to find relevant tenants
       const relevantLeases = await Lease.find({ 
         propertyId: { $in: propertyIds },
         status: { $in: ['active', 'draft'] }
       }).select('tenantId').lean();
       
-      const tenantIds = [...new Set(relevantLeases.map(l => l.tenantId))];
-      tenantQuery._id = { $in: tenantIds };
+      const tenantIds = [...new Set(relevantLeases.map(l => l.tenantId?.toString()).filter(Boolean))];
       
-    } else if (userRole === 'manager') {
-      // Managers can see all properties and tenants
+      if (tenantIds.length === 0) {
+        tenantQuery._id = { $in: [] }; // No tenants found
+      } else {
+        tenantQuery._id = { $in: tenantIds };
+      }
+      
+    } else if (userRole === 'manager' || userRole === 'admin') {
+      // Managers and admins can see all properties and tenants
       // No additional filtering needed
     } else {
       // Other roles should not access this page
@@ -60,35 +74,42 @@ async function getInvoiceFormData(userId, userRole) {
     }
     
     // Fetch all required data in parallel
-    const [tenants, properties, leases] = await Promise.allSettled([
+    const [tenantsResult, propertiesResult, leasesResult] = await Promise.allSettled([
       // Get tenants based on role
       User.find(tenantQuery)
-      .select('name firstName lastName email phone')
-      .sort({ name: 1, firstName: 1 })
-      .lean(),
+        .select('name firstName lastName email phone')
+        .sort({ name: 1, firstName: 1 })
+        .lean(),
 
       // Get properties based on role
       Property.find(propertyQuery)
-      .populate('landlord', 'name firstName lastName')
-      .select('address name type bedrooms bathrooms monthlyRent landlord')
-      .sort({ address: 1 })
-      .lean(),
+        .populate('landlord', 'name firstName lastName')
+        .select('address name type bedrooms bathrooms monthlyRent landlord')
+        .sort({ address: 1 })
+        .lean(),
 
       // Get leases for the available properties
-      Lease.find({ 
-        propertyId: { $in: await Property.find(propertyQuery).select('_id').lean().then(props => props.map(p => p._id)) }
-      })
-      .populate('tenantId', 'name firstName lastName')
-      .populate('propertyId', 'address name')
-      .select('tenantId propertyId monthlyRent startDate endDate status')
-      .sort({ createdAt: -1 })
-      .lean()
+      Property.find(propertyQuery)
+        .select('_id')
+        .lean()
+        .then(props => {
+          const propertyIds = props.map(p => p._id);
+          return Lease.find({ 
+            propertyId: { $in: propertyIds },
+            status: { $in: ['active', 'draft'] }
+          })
+          .populate('tenantId', 'name firstName lastName')
+          .populate('propertyId', 'address name')
+          .select('tenantId propertyId monthlyRent startDate endDate status')
+          .sort({ createdAt: -1 })
+          .lean();
+        })
     ]);
 
     return {
-      tenants: serializeData(tenants.status === 'fulfilled' ? tenants.value : []),
-      properties: serializeData(properties.status === 'fulfilled' ? properties.value : []),
-      leases: serializeData(leases.status === 'fulfilled' ? leases.value : []),
+      tenants: serializeData(tenantsResult.status === 'fulfilled' ? tenantsResult.value : []),
+      properties: serializeData(propertiesResult.status === 'fulfilled' ? propertiesResult.value : []),
+      leases: serializeData(leasesResult.status === 'fulfilled' ? leasesResult.value : []),
       currentUser: { id: userId, role: userRole }
     };
 
@@ -105,6 +126,9 @@ async function getInvoiceFormData(userId, userRole) {
 }
 
 export default async function CreateInvoicePage({ searchParams }) {
+  // Await searchParams for Next.js 15 compatibility
+  const params = await searchParams;
+  
   // Check authentication
   const session = await getServerSession(authOptions);
   
@@ -113,7 +137,7 @@ export default async function CreateInvoicePage({ searchParams }) {
   }
 
   // Check if user has permission to create invoices
-  const allowedRoles = ['landlord', 'manager'];
+  const allowedRoles = ['landlord', 'manager', 'admin'];
   if (!allowedRoles.includes(session.user.role)) {
     redirect('/unauthorized?reason=insufficient_permissions');
   }
@@ -132,12 +156,12 @@ export default async function CreateInvoicePage({ searchParams }) {
           </div>
           <h2 className="text-2xl font-bold text-gray-900 mb-2">Access Error</h2>
           <p className="text-gray-600 mb-6">{data.error}</p>
-          <a
+          <Link
             href="/invoices"
             className="inline-flex items-center px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"
           >
             ← Back to Invoices
-          </a>
+          </Link>
         </div>
       </div>
     );
@@ -172,12 +196,12 @@ export default async function CreateInvoicePage({ searchParams }) {
               </Link>
             )}
             <div>
-              <a
+              <Link
                 href="/invoices"
                 className="text-blue-600 hover:text-blue-800 text-sm"
               >
                 ← Back to Invoices
-              </a>
+              </Link>
             </div>
           </div>
         </div>
@@ -209,12 +233,12 @@ export default async function CreateInvoicePage({ searchParams }) {
               Create Lease
             </Link>
             <div>
-              <a
+              <Link
                 href="/invoices"
                 className="text-blue-600 hover:text-blue-800 text-sm"
               >
                 ← Back to Invoices
-              </a>
+              </Link>
             </div>
           </div>
         </div>
@@ -222,21 +246,26 @@ export default async function CreateInvoicePage({ searchParams }) {
     );
   }
   
-  return <CreateInvoiceClient initialData={data} />;
+  // Pass search params to client component
+  return <CreateInvoiceClient initialData={data} searchParams={params} />;
 }
 
 export async function generateMetadata({ searchParams }) {
+  // Await searchParams for Next.js 15 compatibility
+  const params = await searchParams;
+  
   const session = await getServerSession(authOptions);
   
   if (!session?.user?.id) {
     return {
       title: 'Create Invoice - Authentication Required',
+      description: 'Please sign in to create invoices',
     };
   }
 
   // Check if pre-selecting specific tenant or property
-  const tenantId = searchParams.tenantId;
-  const propertyId = searchParams.propertyId;
+  const tenantId = params?.tenantId;
+  const propertyId = params?.propertyId;
   
   let title = 'Create Invoice - Property Management';
   let description = 'Create a new invoice for tenant billing';
@@ -247,17 +276,35 @@ export async function generateMetadata({ searchParams }) {
       const tenant = await User.findById(tenantId).select('name firstName lastName').lean();
       if (tenant) {
         const tenantName = tenant.name || 
-          `${tenant.firstName || ''} ${tenant.lastName || ''}`.trim();
+          `${tenant.firstName || ''} ${tenant.lastName || ''}`.trim() ||
+          'Unknown Tenant';
         title = `Create Invoice for ${tenantName} - Property Management`;
         description = `Create a new invoice for ${tenantName}`;
       }
     } catch (error) {
       console.error('Error fetching tenant for metadata:', error);
     }
+  } else if (propertyId) {
+    try {
+      await dbConnect();
+      const property = await Property.findById(propertyId).select('address name').lean();
+      if (property) {
+        const propertyName = property.address || property.name || 'Unknown Property';
+        title = `Create Invoice for ${propertyName} - Property Management`;
+        description = `Create a new invoice for ${propertyName}`;
+      }
+    } catch (error) {
+      console.error('Error fetching property for metadata:', error);
+    }
   }
 
   return {
     title,
     description,
+    openGraph: {
+      title,
+      description,
+      type: 'website',
+    },
   };
 }

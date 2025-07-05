@@ -7,6 +7,7 @@ import { NextResponse } from 'next/server';
 import Notification from 'models/Notification';
 import dbConnect from 'lib/db';
 
+
 // GET - Fetch user's notifications (backward compatible)
 export async function GET(request) {
   try {

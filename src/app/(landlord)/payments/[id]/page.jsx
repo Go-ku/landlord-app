@@ -3,22 +3,10 @@ import { notFound, redirect } from 'next/navigation';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/app/api/auth/[...nextauth]/route';
 import PaymentDetailClient from './PaymentDetailClient';
-import Payment from 'models';
-import Lease from 'models';
-import Property from 'models';
-import User from 'models';
+import { Payment, Property, Lease, User } from 'models/index';
 import dbConnect from 'lib/db';
 import mongoose from 'mongoose';
 
-// Helper function to get models
-function getModels() {
-  return {
-    Payment: mongoose.model('Payment'),
-    User: mongoose.model('User'),
-    Property: mongoose.model('Property'),
-    Lease: mongoose.model('Lease')
-  };
-}
 
 // Server function to get payment with role-based access control
 async function getPayment(id, userId, userRole) {
@@ -28,8 +16,6 @@ async function getPayment(id, userId, userRole) {
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return null;
     }
-
-    const { Payment, Property } = getModels();
 
     // Build query with role-based filtering
     let paymentQuery = Payment.findById(id);
