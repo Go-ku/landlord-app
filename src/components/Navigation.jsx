@@ -75,28 +75,28 @@ const NAVIGATION_CONFIG = {
 
 const ROLE_COLORS = {
   tenant: {
-    bg: 'bg-green-100',
-    text: 'text-green-800',
-    border: 'border-green-200',
-    solid: 'bg-green-600'
+    bg: 'bg-emerald-50',
+    text: 'text-emerald-700',
+    border: 'border-emerald-200',
+    solid: 'bg-emerald-600'
   },
   landlord: {
-    bg: 'bg-blue-100',
-    text: 'text-blue-800',
-    border: 'border-blue-200',
-    solid: 'bg-blue-600'
+    bg: 'bg-slate-100',
+    text: 'text-slate-800',
+    border: 'border-slate-200',
+    solid: 'bg-slate-900'
   },
   manager: {
-    bg: 'bg-purple-100',
-    text: 'text-purple-800',
-    border: 'border-purple-200',
-    solid: 'bg-purple-600'
+    bg: 'bg-indigo-50',
+    text: 'text-indigo-700',
+    border: 'border-indigo-200',
+    solid: 'bg-indigo-600'
   },
   admin: {
-    bg: 'bg-red-100',
-    text: 'text-red-800',
-    border: 'border-red-200',
-    solid: 'bg-red-600'
+    bg: 'bg-amber-50',
+    text: 'text-amber-700',
+    border: 'border-amber-200',
+    solid: 'bg-amber-600'
   }
 };
 
@@ -217,31 +217,32 @@ export default function Navigation() {
 
   return (
     <>
-      <nav className="bg-white shadow-lg border-b border-gray-200 sticky top-0 z-40">
-        <div className="container mx-auto px-4">
-          <div className="flex justify-between h-16">
+      <nav className="sticky top-0 z-40 border-b border-slate-200 bg-white/90 shadow-sm backdrop-blur">
+        <div className="page-shell">
+          <div className="flex h-16 items-center justify-between">
             {/* Logo and main navigation */}
             <div className="flex items-center space-x-8">
               {/* Logo */}
-              <Link 
-                href={session.user.role === 'tenant' ? '/tenant' : '/dashboard'} 
+              <Link
+                href={session.user.role === 'tenant' ? '/tenant' : '/dashboard'}
                 className="flex items-center group"
               >
-                <div className="flex items-center space-x-2">
-                  <div className={`w-8 h-8 rounded-lg ${roleColors.solid} flex items-center justify-center shadow-sm`}>
-                    <Building2 className="w-5 h-5 text-white" />
+                <div className="flex items-center space-x-3">
+                  <div className={`flex h-9 w-9 items-center justify-center rounded-xl ${roleColors.solid} text-white shadow-sm`}>
+                    <Building2 className="w-5 h-5" />
                   </div>
-                  <span className="font-bold text-xl text-gray-800 group-hover:text-blue-600 transition-colors duration-300">
-                    RentEase
-                  </span>
+                  <div className="flex flex-col">
+                    <span className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Console</span>
+                    <span className="text-lg font-semibold text-slate-900">Nkwazi</span>
+                  </div>
                 </div>
               </Link>
-              
+
               {/* Desktop Navigation */}
-              <div className="hidden lg:flex items-center space-x-1">
+              <div className="hidden items-center space-x-1 lg:flex">
                 {navigationItems.map((item) => (
-                  <NavLink 
-                    key={item.href} 
+                  <NavLink
+                    key={item.href}
                     href={item.href} 
                     active={isActive(item.href)}
                     icon={item.icon}
@@ -294,7 +295,7 @@ export default function Navigation() {
               {/* Mobile menu button */}
               <button
                 onClick={toggleMobileMenu}
-                className="lg:hidden p-2 rounded-xl text-gray-600 hover:text-gray-900 hover:bg-gray-100 transition-all duration-200"
+                className="rounded-xl p-2 text-slate-600 transition hover:bg-slate-100 hover:text-slate-900 lg:hidden"
                 aria-label="Toggle mobile menu"
               >
                 {isMobileMenuOpen ? (
@@ -338,18 +339,18 @@ function NavLink({ href, active, children, icon: Icon, badge }) {
   return (
     <Link
       href={href}
-      className={`relative inline-flex items-center px-3 py-2 rounded-lg text-sm font-medium transition-all duration-200 group ${
+      className={`relative inline-flex items-center rounded-xl px-3 py-2 text-sm font-medium transition-all duration-200 group ${
         active
-          ? 'bg-blue-50 text-blue-700 border border-blue-200 shadow-sm'
-          : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900 border border-transparent hover:border-gray-200'
+          ? 'bg-slate-900 text-white shadow-sm'
+          : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
       }`}
     >
-      <Icon className={`w-4 h-4 mr-2 transition-transform group-hover:scale-110 ${
-        active ? 'text-blue-600' : 'text-gray-500'
+      <Icon className={`mr-2 h-4 w-4 transition-transform group-hover:scale-110 ${
+        active ? 'text-white' : 'text-slate-500'
       }`} />
       {children}
       {badge && (
-        <span className="ml-2 inline-flex items-center justify-center px-2 py-1 text-xs font-bold leading-none text-white bg-red-500 rounded-full">
+        <span className="ml-2 inline-flex items-center justify-center rounded-full bg-amber-500 px-2 py-1 text-xs font-bold leading-none text-white">
           {badge}
         </span>
       )}
@@ -373,48 +374,48 @@ function RoleBadge({ role, adminLevel, colors }) {
 
 function ProfileButton({ user, userInitials, isOpen, onClick, roleColors }) {
   return (
-    <button 
+    <button
       onClick={onClick}
-      className="flex items-center space-x-3 hover:bg-gray-50 rounded-xl p-2 transition-all duration-200 group border border-transparent hover:border-gray-200"
+      className="group flex items-center space-x-3 rounded-xl border border-transparent p-2 transition-all duration-200 hover:border-slate-200 hover:bg-white"
       aria-expanded={isOpen}
       aria-haspopup="true"
     >
-      <div className={`w-9 h-9 rounded-xl ${roleColors.solid} flex items-center justify-center text-white font-semibold shadow-sm`}>
+      <div className={`flex h-9 w-9 items-center justify-center rounded-xl ${roleColors.solid} font-semibold text-white shadow-sm`}>
         {userInitials}
       </div>
       <div className="hidden md:flex flex-col items-start">
-        <span className="text-sm font-semibold text-gray-900 group-hover:text-gray-700">
+        <span className="text-sm font-semibold text-slate-900 group-hover:text-slate-700">
           {user.name || 'User'}
         </span>
-        <span className="text-xs text-gray-500">
+        <span className="text-xs text-slate-500">
           {user.email?.split('@')[0] || 'user'}
         </span>
       </div>
-      <ChevronDown className={`w-4 h-4 text-gray-500 transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`} />
+      <ChevronDown className={`h-4 w-4 text-slate-500 transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`} />
     </button>
   );
 }
 
 function ProfileDropdown({ user, userInitials, roleColors, onClose, onSignOut, isSigningOut }) {
   return (
-    <div className="absolute right-0 mt-2 w-56 bg-white rounded-xl shadow-lg border border-gray-200 z-50 overflow-hidden">
+    <div className="absolute right-0 z-50 mt-2 w-56 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-lg">
       {/* User Info Header */}
-      <div className="px-4 py-3 bg-gray-50 border-b border-gray-200">
+      <div className="border-b border-slate-200 bg-slate-50 px-4 py-3">
         <div className="flex items-center space-x-3">
-          <div className={`w-10 h-10 rounded-lg ${roleColors.solid} flex items-center justify-center text-white font-semibold`}>
+          <div className={`flex h-10 w-10 items-center justify-center rounded-lg ${roleColors.solid} text-white font-semibold`}>
             {userInitials}
           </div>
           <div>
-            <p className="text-sm font-semibold text-gray-900">{user.name}</p>
-            <p className="text-xs text-gray-500">{user.email}</p>
+            <p className="text-sm font-semibold text-slate-900">{user.name}</p>
+            <p className="text-xs text-slate-500">{user.email}</p>
           </div>
         </div>
       </div>
       
       {/* Menu Items */}
       <div className="py-1">
-        <ProfileMenuItem 
-          href="/profile" 
+        <ProfileMenuItem
+          href="/profile"
           icon={User}
           onClick={onClose}
         >
@@ -442,12 +443,12 @@ function ProfileDropdown({ user, userInitials, roleColors, onClose, onSignOut, i
       
       {/* Sign Out */}
       <div className="border-t border-gray-100">
-        <button 
+        <button
           onClick={onSignOut}
           disabled={isSigningOut}
-          className="flex items-center w-full px-4 py-3 text-sm text-red-600 hover:bg-red-50 transition-colors group disabled:opacity-50 disabled:cursor-not-allowed"
+          className="group flex w-full items-center px-4 py-3 text-sm text-red-600 transition-colors hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
         >
-          <LogOut className={`w-4 h-4 mr-3 transition-transform ${isSigningOut ? 'animate-spin' : 'group-hover:scale-110'}`} />
+          <LogOut className={`mr-3 h-4 w-4 transition-transform ${isSigningOut ? 'animate-spin' : 'group-hover:scale-110'}`} />
           {isSigningOut ? 'Signing Out...' : 'Sign Out'}
         </button>
       </div>
@@ -459,19 +460,19 @@ const MobileMenu = ({ isOpen, navigationItems, user, userInitials, roleColors, i
   if (!isOpen) return null;
 
   return (
-    <div ref={ref} className="lg:hidden bg-white border-t border-gray-200 shadow-lg">
-      <div className="px-4 py-3 space-y-1">
+    <div ref={ref} className="bg-white border-t border-slate-200 shadow-lg lg:hidden">
+      <div className="space-y-1 px-4 py-3">
         {/* Role indicator */}
-        <div className="px-3 py-2 mb-3">
-          <RoleBadge 
-            role={user.role} 
+        <div className="mb-3 px-3 py-2">
+          <RoleBadge
+            role={user.role}
             adminLevel={user.adminLevel}
             colors={roleColors}
           />
         </div>
 
         {/* Notification Center - Mobile */}
-        <div className="sm:hidden px-3 py-2 mb-3">
+        <div className="mb-3 px-3 py-2 sm:hidden">
           <NotificationCenter />
         </div>
 
@@ -490,15 +491,15 @@ const MobileMenu = ({ isOpen, navigationItems, user, userInitials, roleColors, i
         ))}
 
         {/* Mobile profile section */}
-        <div className="border-t border-gray-200 pt-4 mt-4">
+        <div className="mt-4 border-t border-slate-200 pt-4">
           <div className="px-3 py-2 mb-3">
             <div className="flex items-center space-x-3">
-              <div className={`w-10 h-10 rounded-lg ${roleColors.solid} flex items-center justify-center text-white font-semibold`}>
+              <div className={`flex h-10 w-10 items-center justify-center rounded-lg ${roleColors.solid} text-white font-semibold`}>
                 {userInitials}
               </div>
               <div>
-                <p className="text-sm font-semibold text-gray-900">{user.name}</p>
-                <p className="text-xs text-gray-500">{user.email}</p>
+                <p className="text-sm font-semibold text-slate-900">{user.name}</p>
+                <p className="text-xs text-slate-500">{user.email}</p>
               </div>
             </div>
           </div>
@@ -517,15 +518,15 @@ const MobileMenu = ({ isOpen, navigationItems, user, userInitials, roleColors, i
             Help & Support
           </MobileNavLink>
           
-          <button 
-            onClick={onSignOut}
-            disabled={isSigningOut}
-            className="flex items-center w-full px-3 py-2 text-sm text-red-600 hover:bg-red-50 rounded-lg transition-colors mt-2 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            <LogOut className={`w-4 h-4 mr-3 ${isSigningOut ? 'animate-spin' : ''}`} />
-            {isSigningOut ? 'Signing Out...' : 'Sign Out'}
-          </button>
-        </div>
+        <button
+          onClick={onSignOut}
+          disabled={isSigningOut}
+          className="mt-2 flex w-full items-center rounded-lg px-3 py-2 text-sm text-red-600 transition-colors hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          <LogOut className={`mr-3 h-4 w-4 ${isSigningOut ? 'animate-spin' : ''}`} />
+          {isSigningOut ? 'Signing Out...' : 'Sign Out'}
+        </button>
+      </div>
       </div>
     </div>
   );
@@ -536,16 +537,16 @@ function MobileNavLink({ href, active = false, children, icon: Icon, badge, onCl
     <Link
       href={href}
       onClick={onClick}
-      className={`relative flex items-center px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+      className={`relative flex items-center rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
         active
-          ? 'bg-blue-50 text-blue-700 border-l-4 border-blue-500'
-          : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+          ? 'bg-slate-900 text-white shadow-sm'
+          : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
       }`}
     >
-      <Icon className={`w-4 h-4 mr-3 ${active ? 'text-blue-600' : 'text-gray-500'}`} />
+      <Icon className={`mr-3 h-4 w-4 ${active ? 'text-white' : 'text-slate-500'}`} />
       {children}
       {badge && (
-        <span className="ml-auto inline-flex items-center justify-center px-2 py-1 text-xs font-bold leading-none text-white bg-red-500 rounded-full">
+        <span className="ml-auto inline-flex items-center justify-center rounded-full bg-amber-500 px-2 py-1 text-xs font-bold leading-none text-white">
           {badge}
         </span>
       )}
@@ -558,9 +559,9 @@ function ProfileMenuItem({ href, children, icon: Icon, onClick }) {
     <Link
       href={href}
       onClick={onClick}
-      className="flex items-center px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors group"
+      className="group flex items-center px-4 py-2 text-sm text-slate-700 transition-colors hover:bg-slate-50"
     >
-      <Icon className="w-4 h-4 mr-3 text-gray-500 group-hover:text-gray-700 group-hover:scale-110 transition-all" />
+      <Icon className="mr-3 h-4 w-4 text-slate-500 transition-all group-hover:scale-110 group-hover:text-slate-700" />
       {children}
     </Link>
   );
@@ -568,24 +569,24 @@ function ProfileMenuItem({ href, children, icon: Icon, onClick }) {
 
 function NavigationSkeleton() {
   return (
-    <nav className="bg-white shadow-lg border-b border-gray-200 sticky top-0 z-40">
-      <div className="container mx-auto px-4">
-        <div className="flex justify-between h-16">
+    <nav className="sticky top-0 z-40 border-b border-slate-200 bg-white/90 shadow-sm backdrop-blur">
+      <div className="page-shell">
+        <div className="flex h-16 justify-between">
           <div className="flex items-center space-x-8">
             <div className="flex items-center space-x-2">
-              <div className="w-8 h-8 rounded-lg bg-gray-200 animate-pulse"></div>
-              <div className="w-24 h-6 bg-gray-200 rounded animate-pulse"></div>
+              <div className="h-8 w-8 animate-pulse rounded-lg bg-slate-200"></div>
+              <div className="h-6 w-24 animate-pulse rounded bg-slate-200"></div>
             </div>
-            <div className="hidden lg:flex items-center space-x-1">
+            <div className="hidden items-center space-x-1 lg:flex">
               {[1, 2, 3, 4].map(i => (
-                <div key={i} className="w-20 h-8 bg-gray-200 rounded animate-pulse"></div>
+                <div key={i} className="h-8 w-20 animate-pulse rounded bg-slate-200"></div>
               ))}
             </div>
           </div>
           <div className="flex items-center space-x-3">
-            <div className="w-8 h-8 bg-gray-200 rounded animate-pulse"></div>
-            <div className="w-24 h-8 bg-gray-200 rounded animate-pulse"></div>
-            <div className="w-12 h-10 bg-gray-200 rounded-xl animate-pulse"></div>
+            <div className="h-8 w-8 animate-pulse rounded bg-slate-200"></div>
+            <div className="h-8 w-24 animate-pulse rounded bg-slate-200"></div>
+            <div className="h-10 w-12 animate-pulse rounded-xl bg-slate-200"></div>
           </div>
         </div>
       </div>
