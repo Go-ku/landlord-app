@@ -38,7 +38,7 @@ const roleAccess = [
       'Manage billing plans and audit logs',
       'Configure rent increase policies per lease'
     ],
-    accent: 'from-sky-500/20 to-blue-500/10',
+    accent: 'border-slate-200',
     icon: ShieldCheck
   },
   {
@@ -49,7 +49,7 @@ const roleAccess = [
       'Approve rent increases & renewals',
       'Download receipts and statements'
     ],
-    accent: 'from-emerald-500/20 to-green-500/10',
+    accent: 'border-slate-200',
     icon: Home
   },
   {
@@ -60,7 +60,7 @@ const roleAccess = [
       'Send invoices or SMS reminders in kwacha (ZMW)',
       'Register tenants & capture lease renewals'
     ],
-    accent: 'from-amber-500/20 to-orange-500/10',
+    accent: 'border-slate-200',
     icon: Users
   },
   {
@@ -71,7 +71,7 @@ const roleAccess = [
       'Track parts, costs, and before/after photos',
       'Prioritise emergencies automatically'
     ],
-    accent: 'from-rose-500/20 to-pink-500/10',
+    accent: 'border-slate-200',
     icon: Wrench
   },
   {
@@ -82,7 +82,7 @@ const roleAccess = [
       'Submit maintenance with voice notes/photos',
       'Receive renewal notices & rent increase reminders'
     ],
-    accent: 'from-indigo-500/20 to-purple-500/10',
+    accent: 'border-slate-200',
     icon: MessageSquare
   }
 ];
@@ -193,10 +193,10 @@ export default function ZambiaRealEstateApp() {
         </div>
       </header>
 
-      <main className="mx-auto max-w-6xl px-4 py-10 space-y-12">
+      <main className="mx-auto max-w-6xl space-y-12 px-4 py-10">
         <section className="grid gap-8 rounded-3xl bg-white p-6 shadow-sm ring-1 ring-slate-100 md:grid-cols-[1.2fr_0.8fr]">
           <div className="space-y-6">
-            <span className="inline-flex items-center gap-2 rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
+            <span className="inline-flex items-center gap-2 rounded-full border border-slate-200 px-3 py-1 text-xs font-semibold text-slate-700">
               <MapPin className="h-4 w-4" /> Built for Zambia · Lusaka HQ
             </span>
             <h1 className="text-3xl font-bold leading-tight text-slate-900 sm:text-4xl">
@@ -209,14 +209,14 @@ export default function ZambiaRealEstateApp() {
             <div className="flex flex-wrap gap-3">
               <Link
                 href="/auth/register"
-                className="inline-flex items-center justify-center gap-2 rounded-full bg-blue-600 px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-blue-600/30 hover:bg-blue-500"
+                className="inline-flex items-center justify-center gap-2 rounded-full bg-slate-900 px-5 py-3 text-sm font-semibold text-white transition hover:bg-black"
               >
                 Start onboarding
                 <ArrowRight className="h-4 w-4" />
               </Link>
               <Link
                 href="/auth/login"
-                className="inline-flex items-center justify-center gap-2 rounded-full border border-slate-200 px-5 py-3 text-sm font-semibold text-slate-700 hover:border-slate-300"
+                className="inline-flex items-center justify-center gap-2 rounded-full border border-slate-200 px-5 py-3 text-sm font-semibold text-slate-700 transition hover:border-slate-300 hover:text-slate-900"
               >
                 Explore demo data
                 <ChevronRight className="h-4 w-4" />
@@ -236,15 +236,15 @@ export default function ZambiaRealEstateApp() {
                 value: '318',
                 trend: 'Email · SMS · WhatsApp'
               }].map((stat) => (
-                <div key={stat.label} className="rounded-2xl border border-slate-100 p-4">
+                <div key={stat.label} className="rounded-2xl border border-slate-200 p-4">
                   <p className="text-xs uppercase tracking-wide text-slate-500">{stat.label}</p>
                   <p className="mt-2 text-2xl font-semibold text-slate-900">{stat.value}</p>
-                  <p className="text-xs text-emerald-600">{stat.trend}</p>
+                  <p className="text-xs text-slate-500">{stat.trend}</p>
                 </div>
               ))}
             </div>
           </div>
-          <div className="rounded-2xl border border-slate-100 bg-slate-900/95 p-5 text-white">
+          <div className="rounded-2xl border border-slate-200 bg-slate-900/95 p-5 text-white">
             <div className="flex items-center justify-between text-xs text-slate-400">
               <span>Mobile Console</span>
               <Smartphone className="h-4 w-4" />
@@ -292,10 +292,10 @@ export default function ZambiaRealEstateApp() {
             {roleAccess.map(({ title, description, permissions, accent, icon: Icon }) => (
               <article
                 key={title}
-                className={`flex h-full flex-col rounded-3xl border border-slate-100 bg-gradient-to-br ${accent} p-5`}
+                className={`flex h-full flex-col rounded-3xl border ${accent} bg-white p-5 shadow-sm`}
               >
                 <div className="flex items-center gap-3">
-                  <span className="rounded-full bg-white/60 p-2 text-slate-900">
+                  <span className="rounded-full bg-slate-100 p-2 text-slate-800">
                     <Icon className="h-5 w-5" />
                   </span>
                   <h3 className="text-lg font-semibold text-slate-900">{title}</h3>
@@ -304,7 +304,7 @@ export default function ZambiaRealEstateApp() {
                 <ul className="mt-4 space-y-2 text-sm text-slate-700">
                   {permissions.map((item) => (
                     <li key={item} className="flex gap-2">
-                      <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+                      <CheckCircle2 className="h-4 w-4 text-slate-500" />
                       <span>{item}</span>
                     </li>
                   ))}
@@ -381,7 +381,7 @@ export default function ZambiaRealEstateApp() {
               </div>
               <div className="mt-4 space-y-4">
                 {maintenanceQueue.map((ticket) => (
-                  <div key={ticket.property} className="rounded-2xl border border-slate-100 p-4">
+                  <div key={ticket.property} className="rounded-2xl border border-slate-200 p-4">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div>
                         <p className="font-semibold text-slate-900">{ticket.property}</p>
@@ -390,9 +390,9 @@ export default function ZambiaRealEstateApp() {
                       <span
                         className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-semibold ${
                           ticket.priority === 'critical'
-                            ? 'bg-rose-50 text-rose-700'
+                            ? 'bg-rose-100 text-rose-700'
                             : ticket.priority === 'medium'
-                              ? 'bg-amber-50 text-amber-700'
+                              ? 'bg-amber-100 text-amber-700'
                               : 'bg-slate-100 text-slate-700'
                         }`}
                       >
@@ -415,7 +415,7 @@ export default function ZambiaRealEstateApp() {
               </div>
             </div>
 
-            <div className="rounded-3xl bg-slate-900 p-6 text-white shadow-sm">
+            <div className="rounded-3xl border border-slate-800 bg-slate-900 p-6 text-white shadow-sm">
               <div className="flex items-center justify-between">
                 <h3 className="text-xl font-semibold">Lease tracker</h3>
                 <CalendarCheck className="h-5 w-5 text-emerald-400" />
